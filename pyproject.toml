@@ -1,0 +1,25 @@
+[project]
+name = "composhed"
+version = "0.1.0"
+description = "CompSched: compositional activity schedule baseline model"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy",
+    "polars",
+    "scipy",
+    "statsmodels",
+    "scikit-learn",
+    "joblib",
+]
+
+[project.scripts]
+compsched-train = "compsched.train:main"
+compsched-generate = "compsched.generate:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["compsched"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
