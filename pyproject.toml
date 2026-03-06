@@ -11,14 +11,20 @@ dependencies = [
     "statsmodels",
     "scikit-learn",
     "joblib",
+    "biogeme",
 ]
 
 [project.scripts]
-compsched-train = "compsched.train:main"
-compsched-generate = "compsched.generate:main"
+compsched-train = "composhed.train:main"
+compsched-generate = "composhed.generate:main"
+compsched-train-mdcev = "composhed.train_mdcev:main"
+compsched-generate-mdcev = "composhed.generate_mdcev:main"
+
+[dependency-groups]
+dev = ["jupyter", "ipykernel"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["compsched"]
+packages = ["composhed"]
 
 [build-system]
 requires = ["hatchling"]

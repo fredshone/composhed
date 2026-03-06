@@ -8,7 +8,7 @@ import joblib
 import numpy as np
 import statsmodels.api as sm
 
-from compsched.data import (
+from composhed.data import (
     LABEL_COLS,
     build_training_dataset,
     compute_mean_home_times,
@@ -16,12 +16,12 @@ from compsched.data import (
     load_attributes,
     load_schedules,
 )
-from compsched.models.anchor import AnchorTimingModel
-from compsched.models.atype import ActivityTypeModel
-from compsched.models.dap import DAPModel
-from compsched.models.duration import ActivityDurationModel
-from compsched.models.mandatory import MandatoryDurationModel
-from compsched.models.ntours import NToursModel
+from composhed.models.anchor import AnchorTimingModel
+from composhed.models.atype import ActivityTypeModel
+from composhed.models.dap import DAPModel
+from composhed.models.duration import ActivityDurationModel
+from composhed.models.mandatory import MandatoryDurationModel
+from composhed.models.ntours import NToursModel
 
 
 def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:

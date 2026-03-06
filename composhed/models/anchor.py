@@ -4,7 +4,7 @@ import numpy as np
 from scipy.stats import gaussian_kde
 from sklearn.linear_model import LogisticRegression
 
-from compsched.data import LABEL_COLS, encode_features
+from composhed.data import LABEL_COLS, encode_features
 
 DISC_TYPES = ["escort", "medical", "other", "shop", "visit"]
 

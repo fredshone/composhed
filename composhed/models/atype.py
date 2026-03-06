@@ -4,7 +4,7 @@ import numpy as np
 import statsmodels.api as sm
 from statsmodels.discrete.discrete_model import MNLogit
 
-from compsched.data import LABEL_COLS, encode_features
+from composhed.data import LABEL_COLS, encode_features
 
 DISC_TYPES = ["escort", "medical", "other", "shop", "visit"]  # sorted → stable indices
 

@@ -3,7 +3,7 @@
 import numpy as np
 from sklearn.linear_model import LinearRegression
 
-from compsched.data import LABEL_COLS, encode_features
+from composhed.data import LABEL_COLS, encode_features
 
 DISC_TYPES = ["escort", "medical", "other", "shop", "visit"]
 

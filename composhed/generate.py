@@ -6,8 +6,8 @@ import joblib
 import numpy as np
 import polars as pl
 
-from compsched.assembly import assemble_schedule
-from compsched.data import (
+from composhed.assembly import assemble_schedule
+from composhed.data import (
     LABEL_COLS,
     encode_for_generation,
     load_attributes,

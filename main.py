@@ -11,11 +11,17 @@ def main():
 
     cmd = sys.argv.pop(1)
     if cmd == "train":
-        from compsched.train import main as train_main
+        from composhed.train import main as train_main
         train_main()
     elif cmd == "generate":
-        from compsched.generate import main as generate_main
+        from composhed.generate import main as generate_main
         generate_main()
+    elif cmd == "train-mdcev":
+        from composhed.train_mdcev import main as train_mdcev_main
+        train_mdcev_main()
+    elif cmd == "generate-mdcev":
+        from composhed.generate_mdcev import main as generate_mdcev_main
+        generate_mdcev_main()
     else:
         print(f"Unknown command: {cmd}")
         sys.exit(1)

@@ -11,8 +11,22 @@ It is loosely inspired by CEMDAP/DaySim-style tour-based models, deliberately si
 ## Install
 
 ```bash
-pip install -e .
-pip install git+https://github.com/big-ucl/caveat
+# Install uv if needed
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Create venv and install all dependencies
+uv sync
+
+# Optional: install dev dependencies (Jupyter etc.)
+uv sync --group dev
+```
+
+A `uv.lock` lockfile is generated on first `uv sync` and should be committed.
+
+For the Caveat evaluation library (not a runtime dependency):
+
+```bash
+uv pip install git+https://github.com/big-ucl/caveat
 ```
 
 ## Model overview
@@ -39,25 +53,46 @@ The pre-processing pipeline for NTS data is available from [Caveat](https://gith
 
 ## Usage
 
-**Train** all six sub-models:
+`uv run` uses the project's `.venv` automatically — no need to activate it manually.
+
+**Train** all six sub-models (original compositional model):
 
 ```bash
-python -m composhed.train \
-  --attributes data/processed/attributes.csv \
-  --schedules data/processed/schedules_train.pkl \
+uv run compsched-train \
+  --attributes tmp/nts_attributes_2023.csv \
+  --schedules tmp/nts_schedules_2023.csv \
   --output-dir models/
 ```
 
 This saves a single bundle to `models/compsched_models.pkl`.
 
-**Generate** synthetic schedules for a population:
+**Generate** synthetic schedules (original model):
 
 ```bash
-python -m composhed.generate \
-  --attributes data/processed/attributes.csv \
+uv run compsched-generate \
+  --attributes tmp/nts_attributes_2023.csv \
   --models models/compsched_models.pkl \
   --out-attributes output/synthetic_attributes.csv \
   --out-schedules output/synthetic_schedules.csv
+```
+
+**Train** the MDCEV variant:
+
+```bash
+uv run compsched-train-mdcev \
+  --attributes tmp/nts_attributes_2023.csv \
+  --schedules tmp/nts_schedules_2023.csv \
+  --output-dir models/
+```
+
+**Generate** synthetic schedules (MDCEV variant):
+
+```bash
+uv run compsched-generate-mdcev \
+  --attributes tmp/nts_attributes_2023.csv \
+  --models models/mdcev_models.pkl \
+  --out-attributes output/synthetic_mdcev_attributes.csv \
+  --out-schedules output/synthetic_mdcev_schedules.csv
 ```
 
 Output csvs have columns `pid, act, start, end, duration` (schedules) and `pid, gender, age, car_access, work_status, household_income` (attributes), matching the Caveat synthetic data format.
