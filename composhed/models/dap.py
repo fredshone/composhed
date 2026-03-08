@@ -21,9 +21,12 @@ class DAPModel:
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
         X_const = sm.add_constant(X, has_constant="add")
         probs = self.result_.predict(X_const)  # (n, 4)
-        # Ensure sums to 1 (floating point safety)
+        # Replace NaN/inf (MNLogit overflow with small data) before normalising
+        probs = np.where(np.isfinite(probs), probs, 0.0)
         probs = np.clip(probs, 0, None)
-        probs = probs / probs.sum(axis=1, keepdims=True)
+        s = probs.sum(axis=1, keepdims=True)
+        # Where sum is 0 (all invalid), fall back to uniform
+        probs = np.where(s > 0, probs / s, 1.0 / len(self.CLASSES))
         return probs
 
     def sample(self, X: np.ndarray) -> list[str]:

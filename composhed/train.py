@@ -1,4 +1,4 @@
-"""Train all CompSched models and save to disk."""
+"""Train all Composhed models and save to disk."""
 
 import argparse
 import os
@@ -111,13 +111,13 @@ def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
         "mean_home": mean_home,
         "label_cols": LABEL_COLS,
     }
-    out_path = os.path.join(output_dir, "compsched_models.pkl")
+    out_path = os.path.join(output_dir, "composhed_models.pkl")
     joblib.dump(bundle, out_path, compress=3)
     print(f"\nModels saved to {out_path} ({time.time()-t0:.1f}s)")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train CompSched models")
+    parser = argparse.ArgumentParser(description="Train Composhed models")
     parser.add_argument("--attributes", required=True)
     parser.add_argument("--schedules", required=True)
     parser.add_argument("--output-dir", default="models")

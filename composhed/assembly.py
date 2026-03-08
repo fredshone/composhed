@@ -78,6 +78,8 @@ def assemble_schedule(
 
     # ---- D: home → disc → home ------------------------------------------
     if dap == "D":
+        if not disc:
+            return _to_rows([("home", 1440)])
         fd = int(np.clip(round(first_departure or 480), 0, 1380))
         disc_total = sum(d for _, d in disc)
         home_eve = 1440 - fd - disc_total
@@ -143,6 +145,15 @@ def _to_rows(seq: list[tuple[str, int]]) -> list[dict]:
     """Convert (act, dur) sequence to row dicts, fix rounding, assert 1440."""
     # Remove zero-duration activities
     seq = [(a, d) for a, d in seq if d > 0]
+
+    # Merge consecutive same-type activities (e.g. two "visit" slots → one)
+    merged: list[tuple[str, int]] = []
+    for act, dur in seq:
+        if merged and merged[-1][0] == act:
+            merged[-1] = (act, merged[-1][1] + dur)
+        else:
+            merged.append((act, dur))
+    seq = merged
 
     # Fix rounding so sum == 1440
     total = sum(d for _, d in seq)

@@ -1,7 +1,7 @@
 [project]
 name = "composhed"
 version = "0.1.0"
-description = "CompSched: compositional activity schedule baseline model"
+description = "Composhed: compositional activity schedule baseline model"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

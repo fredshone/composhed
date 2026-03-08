@@ -64,14 +64,14 @@ uv run compsched-train \
   --output-dir models/
 ```
 
-This saves a single bundle to `models/compsched_models.pkl`.
+This saves a single bundle to `models/composhed_models.pkl`.
 
 **Generate** synthetic schedules (original model):
 
 ```bash
-uv run compsched-generate \
-  --attributes tmp/nts_attributes_2023.csv \
-  --models models/compsched_models.pkl \
+python -m composhed.generate \
+  --attributes data/processed/attributes.csv \
+  --models models/composhed_models.pkl \
   --out-attributes output/synthetic_attributes.csv \
   --out-schedules output/synthetic_schedules.csv
 ```

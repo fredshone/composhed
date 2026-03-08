@@ -205,7 +205,7 @@ def _write_csv_with_index(df: pl.DataFrame, path: str) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate CompSched synthetic schedules")
+    parser = argparse.ArgumentParser(description="Generate Composhed synthetic schedules")
     parser.add_argument("--attributes", required=True)
     parser.add_argument("--models", required=True)
     parser.add_argument("--out-attributes", default="synthetic_attributes.csv")
