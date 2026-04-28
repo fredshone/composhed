@@ -5,6 +5,7 @@ import argparse
 import joblib
 import numpy as np
 import polars as pl
+from tqdm import tqdm
 
 from composhed.assembly import assemble_schedule
 from composhed.data import (
@@ -38,31 +39,30 @@ def generate(
     X_all = encode_for_generation(attr_df, LABEL_COLS, feature_names)
     attr_rows = attr_df.select(["pid"] + LABEL_COLS).to_dicts()
 
-    print(f"Generating {n} schedules...")
+    print(f"Sampling MDCEV allocations for {n} persons...")
+    all_allocs = mdcev_model.sample_batch(X_all)
+
+    print(f"Assembling {n} schedules...")
     sched_rows: list[dict] = []
 
-    for i, pid in enumerate(pids):
-        x_label = X_all[i]
+    for i, pid in tqdm(enumerate(pids), total=n, desc="Assembling"):
         work_status = str(attr_rows[i]["work_status"])
 
         try:
             rows = _generate_one(
                 pid=pid,
-                x_label=x_label,
+                alloc=all_allocs[i],
+                x_label=X_all[i],
                 work_status=work_status,
-                mdcev_model=mdcev_model,
                 anchor_model=anchor_model,
             )
         except Exception as exc:
-            print(f"  WARNING pid={pid}: {exc}; using fallback H schedule")
+            tqdm.write(f"  WARNING pid={pid}: {exc}; using fallback H schedule")
             rows = [{"act": "home", "start": 0, "end": 1440, "duration": 1440}]
 
         for row in rows:
             row["pid"] = pid
             sched_rows.append(row)
-
-        if (i + 1) % 5000 == 0:
-            print(f"  {i + 1}/{n}")
 
     print(f"Writing {out_attributes} ...")
     out_attr_df = pl.DataFrame(attr_rows).select(["pid"] + LABEL_COLS)
@@ -77,15 +77,14 @@ def generate(
 
 def _generate_one(
     pid: int,
+    alloc: dict[str, float],
     x_label: np.ndarray,
     work_status: str,
-    mdcev_model,
     anchor_model,
 ) -> list[dict]:
-    """Generate a schedule for one person using the MDCEV allocation."""
+    """Generate a schedule for one person given a pre-sampled MDCEV allocation."""
 
-    # ---- 1. Sample MDCEV time allocation ------------------------------------
-    t = mdcev_model.sample(x_label)  # {type: minutes_float}
+    t = alloc
 
     # ---- 2. Derive chosen activities (threshold > 1 min) --------------------
     chosen = [(atype, dur) for atype, dur in t.items() if atype != "home" and dur > 1.0]

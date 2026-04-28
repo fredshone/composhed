@@ -5,6 +5,7 @@ import argparse
 import joblib
 import numpy as np
 import polars as pl
+from tqdm import tqdm
 
 from composhed.assembly import assemble_schedule
 from composhed.data import (
@@ -50,7 +51,7 @@ def generate(
     print("Generating schedules...")
     sched_rows: list[dict] = []
 
-    for i, (pid, dap) in enumerate(zip(pids, dap_list)):
+    for i, (pid, dap) in tqdm(enumerate(zip(pids, dap_list)), total=n, desc="Generating"):
         x_label = X_all[i]
         work_status = str(attr_rows[i]["work_status"])
 
@@ -69,16 +70,12 @@ def generate(
                 feature_names=feature_names,
             )
         except Exception as exc:
-            # Fallback: single home activity
-            print(f"  WARNING pid={pid}: {exc}; using fallback H schedule")
+            tqdm.write(f"  WARNING pid={pid}: {exc}; using fallback H schedule")
             rows = [{"act": "home", "start": 0, "end": 1440, "duration": 1440}]
 
         for row in rows:
             row["pid"] = pid
             sched_rows.append(row)
-
-        if (i + 1) % 5000 == 0:
-            print(f"  {i+1}/{n}")
 
     # Write outputs — polars with pandas-style unnamed index column
     print(f"Writing {out_attributes} ...")

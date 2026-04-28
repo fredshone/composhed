@@ -3,8 +3,8 @@ import sys
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python main.py [train|generate] [args...]")
-        print("  Or use: composhed-train / composhed-generate")
+        print("Usage: python main.py [train|generate|evaluate] [args...]")
+        print("  Or use: composhed-train / composhed-generate / compsched-evaluate")
         sys.exit(1)
 
     cmd = sys.argv.pop(1)
@@ -22,6 +22,9 @@ def main():
     elif cmd == "generate-mdcev":
         from composhed.generate_mdcev import main as generate_mdcev_main
         generate_mdcev_main()
+    elif cmd == "evaluate":
+        from composhed.evaluate import main as evaluate_main
+        evaluate_main()
     else:
         print(f"Unknown command: {cmd}")
         sys.exit(1)

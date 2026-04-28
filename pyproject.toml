@@ -12,6 +12,7 @@ dependencies = [
     "scikit-learn",
     "joblib",
     "biogeme",
+    "acteval>=0.1.1",
 ]
 
 [project.scripts]
@@ -19,9 +20,14 @@ compsched-train = "composhed.train:main"
 compsched-generate = "composhed.generate:main"
 compsched-train-mdcev = "composhed.train_mdcev:main"
 compsched-generate-mdcev = "composhed.generate_mdcev:main"
+compsched-evaluate = "composhed.evaluate:main"
 
 [dependency-groups]
-dev = ["jupyter", "ipykernel"]
+dev = [
+    "jupyter",
+    "ipykernel",
+    "pytest>=9.0.3",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["composhed"]

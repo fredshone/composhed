@@ -5,6 +5,7 @@ import os
 import time
 
 import joblib
+from tqdm import tqdm
 
 from composhed.data import (
     LABEL_COLS,
@@ -17,7 +18,7 @@ from composhed.models.anchor import AnchorTimingModel
 from composhed.models.mdcev import MDCEVModel
 
 
-def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
+def train(attributes_path: str, schedules_path: str, output_dir: str, max_records: int | None = None) -> None:
     t0 = time.time()
     print("Loading data...")
     attr_df = load_attributes(attributes_path)
@@ -27,18 +28,26 @@ def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
     records, _ = build_training_dataset(attr_df, sched_df)
     print(f"  {len(records)} persons")
 
+    if max_records is not None and len(records) > max_records:
+        import random
+        random.seed(42)
+        records = random.sample(records, max_records)
+        print(f"  Subsampled to {max_records} persons for MDCEV estimation")
+
     X_base, feature_names = encode_features(records, LABEL_COLS)
     print(f"  {len(feature_names)} label features: {feature_names[:5]}...")
 
-    # ---- MDCEV: Steps 1–5 in one model ------------------------------------
-    print("Fitting MDCEV model (this may take several minutes)...")
-    mdcev_model = MDCEVModel().fit(records, feature_names)
-    print("  Done.")
+    steps = ["MDCEV model (biogeme, slow)", "Anchor timing"]
+    pbar = tqdm(steps, desc="Training")
 
-    # ---- Anchor timing: Step 6 (unchanged) --------------------------------
-    print("Fitting anchor timing model...")
+    pbar.set_description(f"Step 1: {steps[0]}")
+    mdcev_model = MDCEVModel().fit(records, feature_names, X=X_base)
+    pbar.update(1)
+
+    pbar.set_description(f"Step 2: {steps[1]}")
     anchor_model = AnchorTimingModel().fit(records, feature_names)
-    print("  Done.")
+    pbar.update(1)
+    pbar.close()
 
     # ---- Save -------------------------------------------------------------
     os.makedirs(output_dir, exist_ok=True)
@@ -58,8 +67,9 @@ def main() -> None:
     parser.add_argument("--attributes", required=True)
     parser.add_argument("--schedules", required=True)
     parser.add_argument("--output-dir", default="models")
+    parser.add_argument("--max-records", type=int, default=5000)
     args = parser.parse_args()
-    train(args.attributes, args.schedules, args.output_dir)
+    train(args.attributes, args.schedules, args.output_dir, args.max_records)
 
 
 if __name__ == "__main__":

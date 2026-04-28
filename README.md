@@ -97,10 +97,24 @@ uv run compsched-generate-mdcev \
 
 Output csvs have columns `pid, act, start, end, duration` (schedules) and `pid, gender, age, car_access, work_status, household_income` (attributes), matching the Caveat synthetic data format.
 
+## Latest Results
+
+Trained and evaluated using nts 2023. Lower is better.
+
+| Domain          | Compositional | MDCEV variant | ACTVAE |
+|-----------------|---------------|---------------|--------|
+| Creativity      | 0.246         | 0.053         | **0.018**  |
+| Feasibility     | **0.000**     | **0.000**     | 0.030  |
+| Participations  | 0.602         | 0.257         | **0.072** |
+| Timing          | 0.163         | 0.114         | **0.029** |
+| Transitions     | 0.015         | 0.017         | **0.005** |
+
+
 ## Todo
 
+- Train and generation timing
 - Evaluation notebook comparing against Caveat baselines (EMD, feasibility rate, creativity)
 - Calibration plots for each sub-model
 - Work-based subtour decomposition (currently collapsed into the work activity)
-- Location/mode choice modules (currently omitted by design to match Caveat scope)
+- Location/mode choice modules (currently omitted by design to match ActVAE/Caveat scope)
 - Config file support as an alternative to CLI args

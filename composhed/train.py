@@ -7,6 +7,7 @@ import time
 import joblib
 import numpy as np
 import statsmodels.api as sm
+from tqdm import tqdm
 
 from composhed.data import (
     LABEL_COLS,
@@ -41,14 +42,24 @@ def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
     mean_home = compute_mean_home_times(records)
     print(f"  Mean home times by DAP: {mean_home}")
 
+    steps = [
+        "DAP model",
+        "Mandatory duration",
+        "N disc tours",
+        "Activity type",
+        "Activity duration",
+        "Anchor timing",
+    ]
+    pbar = tqdm(steps, desc="Training")
+
     # ---- Step 1: DAP MNLogit ---------------------------------------------------
-    print("Step 1: Fitting DAP model...")
+    pbar.set_description(f"Step 1: {steps[0]}")
     y_dap = [r["dap"] for r in records]
     dap_model = DAPModel().fit(X_base, y_dap)
-    print("  Done.")
+    pbar.update(1)
 
     # ---- Step 2: Mandatory duration --------------------------------------------
-    print("Step 2: Fitting mandatory duration model...")
+    pbar.set_description(f"Step 2: {steps[1]}")
     mand_records = [r for r in records if r["dap"] in ("W", "WD")]
     if mand_records:
         X_mand, _ = encode_features(mand_records, LABEL_COLS, feature_names=feature_names)
@@ -60,10 +71,10 @@ def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
         mand_model = MandatoryDurationModel().fit(X_mand, y_mand)
     else:
         mand_model = None
-    print("  Done.")
+    pbar.update(1)
 
     # ---- Step 3: Number of disc tours -----------------------------------------
-    print("Step 3: Fitting n_disc model...")
+    pbar.set_description(f"Step 3: {steps[2]}")
     disc_records = [r for r in records if r["dap"] in ("WD", "D")]
     if disc_records:
         X_disc, _ = encode_features(disc_records, LABEL_COLS, feature_names=feature_names)
@@ -81,22 +92,23 @@ def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
         ntours_model = NToursModel().fit(X_ntours, y_ntours)
     else:
         ntours_model = None
-    print("  Done.")
+    pbar.update(1)
 
     # ---- Step 4: Activity type per slot ----------------------------------------
-    print("Step 4: Fitting activity type models...")
+    pbar.set_description(f"Step 4: {steps[3]}")
     atype_model = ActivityTypeModel().fit(disc_slot_records, feature_names)
-    print("  Done.")
+    pbar.update(1)
 
     # ---- Step 5: Activity duration per type ------------------------------------
-    print("Step 5: Fitting activity duration models...")
+    pbar.set_description(f"Step 5: {steps[4]}")
     dur_model = ActivityDurationModel().fit(disc_slot_records, feature_names)
-    print("  Done.")
+    pbar.update(1)
 
     # ---- Step 6: Anchor timing -------------------------------------------------
-    print("Step 6: Fitting anchor timing models...")
+    pbar.set_description(f"Step 6: {steps[5]}")
     anchor_model = AnchorTimingModel().fit(records, feature_names)
-    print("  Done.")
+    pbar.update(1)
+    pbar.close()
 
     # ---- Save ------------------------------------------------------------------
     os.makedirs(output_dir, exist_ok=True)
