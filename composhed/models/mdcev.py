@@ -4,6 +4,7 @@ import re
 
 import numpy as np
 import pandas as pd
+import torch
 import biogeme.database as bio_db
 from biogeme.mdcev import GammaProfile
 from biogeme.expressions import Beta, Variable
@@ -181,40 +182,47 @@ class MDCEVModel:
         -------
         ``(N, K)`` allocation matrix; each row sums to ``BUDGET``.
         """
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         N = X.shape[0]
         K = len(self.TYPES)
 
+        X_t = torch.tensor(X, dtype=torch.float64, device=device)
+        eps_t = torch.tensor(epsilons, dtype=torch.float64, device=device)
+        B_t = torch.tensor(self._B, dtype=torch.float64, device=device)
+        intercepts_t = torch.tensor(self._intercepts, dtype=torch.float64, device=device)
+        gammas_t = torch.tensor(self._gammas, dtype=torch.float64, device=device)
+
         # psi_k = exp(V_k + eps_k / scale), V_k = intercept_k + B_k · x
-        psi = np.exp(X @ self._B.T + self._intercepts + epsilons / self._scale)  # (N, K)
+        psi = torch.exp(X_t @ B_t.T + intercepts_t + eps_t / self._scale)  # (N, K)
 
         # Sort by psi descending — Pinjari-Bhat chosen-set identification
-        order = np.argsort(-psi, axis=1)  # (N, K)
-        psi_s = np.take_along_axis(psi, order, axis=1)
-        gamma_s = self._gammas[order]
+        order = torch.argsort(-psi, dim=1)  # (N, K)
+        psi_s = torch.gather(psi, 1, order)
+        gamma_s = gammas_t.unsqueeze(0).expand(N, K).gather(1, order)  # (N, K)
 
         # lambda(m) = cum(gamma * psi) / (BUDGET + cum(gamma)) if first m chosen
-        cum_gp = np.cumsum(gamma_s * psi_s, axis=1)  # (N, K)
-        cum_g = np.cumsum(gamma_s, axis=1)  # (N, K)
+        cum_gp = torch.cumsum(gamma_s * psi_s, dim=1)  # (N, K)
+        cum_g = torch.cumsum(gamma_s, dim=1)  # (N, K)
         lam_m = cum_gp / (self.BUDGET + cum_g)  # (N, K)
 
         # Chosen set is a prefix: psi_s[:,m] > lam_m[:,m]
         cond = psi_s > lam_m  # (N, K)
-        all_ch = cond.all(axis=1)
-        n_ch = np.where(all_ch, K, np.argmin(cond, axis=1))
-        n_ch = np.maximum(n_ch, 1)
+        all_ch = cond.all(dim=1)
+        n_ch = torch.where(all_ch, torch.tensor(K, device=device), torch.argmin(cond.long(), dim=1))
+        n_ch = torch.clamp(n_ch, min=1)
 
-        lam = lam_m[np.arange(N), n_ch - 1]  # (N,)
+        lam = lam_m[torch.arange(N, device=device), n_ch - 1]  # (N,)
 
         # x_k = gamma_k * (psi_k / lambda - 1) for chosen, 0 for unchosen
-        x_s = gamma_s * (psi_s / lam[:, None] - 1)
-        mask = np.arange(K)[None, :] < n_ch[:, None]
-        x_s = np.where(mask, np.maximum(x_s, 0.0), 0.0)
+        x_s = gamma_s * (psi_s / lam.unsqueeze(1) - 1)
+        mask = torch.arange(K, device=device).unsqueeze(0) < n_ch.unsqueeze(1)
+        x_s = torch.where(mask, torch.clamp(x_s, min=0.0), torch.zeros_like(x_s))
 
         # Un-sort, normalise to exact BUDGET
-        x = np.empty_like(x_s)
-        x[np.arange(N)[:, None], order] = x_s
-        x = x / x.sum(axis=1, keepdims=True) * self.BUDGET
-        return x
+        x = torch.zeros_like(x_s)
+        x.scatter_(1, order, x_s)
+        x = x / x.sum(dim=1, keepdim=True) * self.BUDGET
+        return x.cpu().numpy()
 
     def sample_batch(self, X: np.ndarray) -> list[dict[str, float]]:
         """Sample time allocations for N persons using vectorised NumPy forecast.
