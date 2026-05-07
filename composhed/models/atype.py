@@ -33,7 +33,7 @@ class ActivityTypeModel:
             [
                 [float(r["dap_WD"]) for r in slot_records],
                 [float(r["slot_numeric"]) for r in slot_records],
-                [float(r["remaining_budget"]) for r in slot_records],
+                [float(r["remaining_budget"]) / 1440.0 for r in slot_records],
             ]
         )
         X_all = np.hstack([X_base, extra])
@@ -70,7 +70,7 @@ class ActivityTypeModel:
         if model is None:
             return np.random.choice(DISC_TYPES)
 
-        extra = np.array([float(dap_WD), float(slot_numeric), float(remaining_budget)])
+        extra = np.array([float(dap_WD), float(slot_numeric), float(remaining_budget) / 1440.0])
         x = np.hstack([x_label, extra]).reshape(1, -1)
         x_const = sm.add_constant(x, has_constant="add")
         probs = model.predict(x_const)[0]

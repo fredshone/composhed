@@ -7,6 +7,7 @@ import time
 import joblib
 import numpy as np
 import statsmodels.api as sm
+from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 
 from composhed.data import (
@@ -38,6 +39,8 @@ def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
     # ---- Encode base label features -------------------------------------------
     X_base, feature_names = encode_features(records, LABEL_COLS)
     print(f"  {len(feature_names)} label features: {feature_names[:5]}...")
+    # Fit scaler on label features for use in the anchor logistic model only
+    scaler = StandardScaler().fit(X_base)
 
     mean_home = compute_mean_home_times(records)
     print(f"  Mean home times by DAP: {mean_home}")
@@ -54,12 +57,14 @@ def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
 
     # ---- Step 1: DAP MNLogit ---------------------------------------------------
     pbar.set_description(f"Step 1: {steps[0]}")
+    print(f"\nStep 1: DAP model", flush=True)
     y_dap = [r["dap"] for r in records]
     dap_model = DAPModel().fit(X_base, y_dap)
     pbar.update(1)
 
     # ---- Step 2: Mandatory duration --------------------------------------------
     pbar.set_description(f"Step 2: {steps[1]}")
+    print(f"\nStep 2: Mandatory duration", flush=True)
     mand_records = [r for r in records if r["dap"] in ("W", "WD")]
     if mand_records:
         X_mand, _ = encode_features(mand_records, LABEL_COLS, feature_names=feature_names)
@@ -75,6 +80,7 @@ def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
 
     # ---- Step 3: Number of disc tours -----------------------------------------
     pbar.set_description(f"Step 3: {steps[2]}")
+    print(f"\nStep 3: N disc tours", flush=True)
     disc_records = [r for r in records if r["dap"] in ("WD", "D")]
     if disc_records:
         X_disc, _ = encode_features(disc_records, LABEL_COLS, feature_names=feature_names)
@@ -83,7 +89,7 @@ def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
         ).reshape(-1, 1)
         rem_budget = np.array(
             [
-                1440.0 - r["mandatory_duration"] - mean_home.get(r["dap"], 400.0)
+                (1440.0 - r["mandatory_duration"] - mean_home.get(r["dap"], 400.0)) / 1440.0
                 for r in disc_records
             ]
         ).reshape(-1, 1)
@@ -96,17 +102,20 @@ def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
 
     # ---- Step 4: Activity type per slot ----------------------------------------
     pbar.set_description(f"Step 4: {steps[3]}")
+    print(f"\nStep 4: Activity type", flush=True)
     atype_model = ActivityTypeModel().fit(disc_slot_records, feature_names)
     pbar.update(1)
 
     # ---- Step 5: Activity duration per type ------------------------------------
     pbar.set_description(f"Step 5: {steps[4]}")
+    print(f"\nStep 5: Activity duration", flush=True)
     dur_model = ActivityDurationModel().fit(disc_slot_records, feature_names)
     pbar.update(1)
 
     # ---- Step 6: Anchor timing -------------------------------------------------
     pbar.set_description(f"Step 6: {steps[5]}")
-    anchor_model = AnchorTimingModel().fit(records, feature_names)
+    print(f"\nStep 6: Anchor timing", flush=True)
+    anchor_model = AnchorTimingModel().fit(records, feature_names, scaler)
     pbar.update(1)
     pbar.close()
 
@@ -119,6 +128,7 @@ def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
         "atype": atype_model,
         "duration": dur_model,
         "anchor": anchor_model,
+        "scaler": scaler,
         "feature_names": feature_names,
         "mean_home": mean_home,
         "label_cols": LABEL_COLS,

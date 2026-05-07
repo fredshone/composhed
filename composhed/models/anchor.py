@@ -12,12 +12,13 @@ DISC_TYPES = ["escort", "medical", "other", "shop", "visit"]
 class AnchorTimingModel:
     """Fit and sample timing-related distributions from training data."""
 
-    def fit(self, records: list[dict], feature_names: list[str]) -> "AnchorTimingModel":
+    def fit(self, records: list[dict], feature_names: list[str], scaler) -> "AnchorTimingModel":
         self.feature_names_ = feature_names
+        self.scaler_ = scaler
         self._fit_work_start_kdes(records)
         self._fit_first_dep_kdes(records)
         self._fit_home_split(records)
-        self._fit_before_work(records, feature_names)
+        self._fit_before_work(records, feature_names, scaler)
         return self
 
     # ------------------------------------------------------------------
@@ -33,7 +34,7 @@ class AnchorTimingModel:
         for r in records:
             if r["dap"] in ("W", "WD") and r["work_start"] is not None:
                 ws = float(r["work_start"])
-                by_status[str(r["work_status"])].append(ws)
+                by_status[str(r["employment"])].append(ws)
                 all_starts.append(ws)
 
         self.work_start_kdes_: dict[str, gaussian_kde] = {}
@@ -51,7 +52,7 @@ class AnchorTimingModel:
         for r in records:
             if r["dap"] == "D" and r["first_departure"] is not None:
                 fd = float(r["first_departure"])
-                by_status[str(r["work_status"])].append(fd)
+                by_status[str(r["employment"])].append(fd)
                 all_deps.append(fd)
 
         self.first_dep_kdes_: dict[str, gaussian_kde] = {}
@@ -76,7 +77,7 @@ class AnchorTimingModel:
         self.beta_a_ = float(a)
         self.beta_b_ = float(b)
 
-    def _fit_before_work(self, records: list[dict], feature_names: list[str]) -> None:
+    def _fit_before_work(self, records: list[dict], feature_names: list[str], scaler) -> None:
         """Logistic regression: P(before_work | labels, work_start, atype)."""
         rows_for_fit: list[dict] = []
         y_vals: list[int] = []
@@ -99,9 +100,10 @@ class AnchorTimingModel:
 
         # Encode: label one-hots + work_start + atype dummies
         X_label, _ = encode_features(rows_for_fit, LABEL_COLS, feature_names=feature_names)
+        X_label = scaler.transform(X_label)
         work_starts = np.array(
             [r["_work_start"] for r in rows_for_fit], dtype=np.float64
-        ).reshape(-1, 1)
+        ).reshape(-1, 1) / 1440.0
         atype_dummies = np.zeros((len(rows_for_fit), len(DISC_TYPES)), dtype=np.float64)
         for i, r in enumerate(rows_for_fit):
             if r["_atype"] in DISC_TYPES:
@@ -109,21 +111,21 @@ class AnchorTimingModel:
         X = np.hstack([X_label, work_starts, atype_dummies])
         y = np.array(y_vals, dtype=int)
 
-        self.before_work_model_ = LogisticRegression(max_iter=500).fit(X, y)
+        self.before_work_model_ = LogisticRegression(max_iter=2000).fit(X, y)
 
     # ------------------------------------------------------------------
     # Sampling
     # ------------------------------------------------------------------
 
-    def sample_work_start(self, work_status: str) -> float:
-        kde = self.work_start_kdes_.get(work_status, self._global_work_kde)
+    def sample_work_start(self, employment: str) -> float:
+        kde = self.work_start_kdes_.get(employment, self._global_work_kde)
         if kde is None:
             return float(np.random.uniform(480, 600))
         val = float(kde.resample(1)[0, 0])
         return float(np.clip(val, 0.0, 1380.0))
 
-    def sample_first_departure(self, work_status: str) -> float:
-        kde = self.first_dep_kdes_.get(work_status, self._global_dep_kde)
+    def sample_first_departure(self, employment: str) -> float:
+        kde = self.first_dep_kdes_.get(employment, self._global_dep_kde)
         if kde is None:
             return float(np.random.uniform(480, 720))
         val = float(kde.resample(1)[0, 0])
@@ -144,13 +146,14 @@ class AnchorTimingModel:
         if self.before_work_model_ is None or not disc_activities:
             return [False] * len(disc_activities)
 
+        x_label_scaled = self.scaler_.transform(x_label.reshape(1, -1))[0]
         flags = []
         for atype, _ in disc_activities:
             atype_row = np.zeros(len(DISC_TYPES), dtype=np.float64)
             if atype in DISC_TYPES:
                 atype_row[DISC_TYPES.index(atype)] = 1.0
-            ws_arr = np.array([[work_start]], dtype=np.float64)
-            x = np.hstack([x_label.reshape(1, -1), ws_arr, atype_row.reshape(1, -1)])
+            ws_arr = np.array([[work_start / 1440.0]], dtype=np.float64)
+            x = np.hstack([x_label_scaled.reshape(1, -1), ws_arr, atype_row.reshape(1, -1)])
             p_before = self.before_work_model_.predict_proba(x)[0, 1]
             flags.append(bool(np.random.random() < p_before))
         return flags

@@ -53,14 +53,14 @@ def generate(
 
     for i, (pid, dap) in tqdm(enumerate(zip(pids, dap_list)), total=n, desc="Generating"):
         x_label = X_all[i]
-        work_status = str(attr_rows[i]["work_status"])
+        employment = str(attr_rows[i]["employment"])
 
         try:
             rows = _generate_one(
                 pid=pid,
                 dap=dap,
                 x_label=x_label,
-                work_status=work_status,
+                employment=employment,
                 mand_model=mand_model,
                 ntours_model=ntours_model,
                 atype_model=atype_model,
@@ -93,7 +93,7 @@ def _generate_one(
     pid: int,
     dap: str,
     x_label: np.ndarray,
-    work_status: str,
+    employment: str,
     mand_model,
     ntours_model,
     atype_model,
@@ -122,7 +122,7 @@ def _generate_one(
             mandatory_duration = 480.0
 
         # Anchor: work start
-        work_start = anchor_model.sample_work_start(work_status)
+        work_start = anchor_model.sample_work_start(employment)
         # Ensure work fits in day
         work_start = float(np.clip(work_start, 0.0, 1440.0 - mandatory_duration - 60.0))
 
@@ -136,7 +136,7 @@ def _generate_one(
                 1440.0 - mandatory_duration - mean_home.get(dap, 400.0)
             )
             x_ntours = np.hstack(
-                [x_label.reshape(1, -1), dap_WD, [[remaining_budget]]]
+                [x_label.reshape(1, -1), dap_WD, [[remaining_budget / 1440.0]]]
             )
             avail = remaining_budget / 30.0  # min 30 min per activity
             max_allowed = np.array([max(0, int(avail))])
@@ -166,7 +166,7 @@ def _generate_one(
     # ---- Step 6a: Anchor timing for D ---------------------------------------
     first_departure = None
     if dap == "D":
-        first_departure = anchor_model.sample_first_departure(work_status)
+        first_departure = anchor_model.sample_first_departure(employment)
 
     # ---- Step 6b: Before-work flags (WD only) --------------------------------
     before_work_flags: list[bool] = []

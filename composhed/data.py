@@ -3,26 +3,24 @@
 import numpy as np
 import polars as pl
 
-LABEL_COLS = ["gender", "age_group", "car_access", "work_status", "income"]
+LABEL_COLS = ["age", "hh_income", "sex", "employment", "day", "hh_zone", "access_egress_distance", "vehicles"]
 MANDATORY_ACTS = {"work", "education"}
 DISC_ACTS = {"shop", "visit", "escort", "medical", "other"}
 
 
 def load_attributes(path: str) -> pl.DataFrame:
     df = pl.read_csv(path)
-    df = df.with_columns(
-        pl.when(pl.col("car_access") == "unknown")
-        .then(pl.lit("yes"))
-        .otherwise(pl.col("car_access"))
-        .alias("car_access")
-    )
+    df = df.with_columns([pl.col(c).cast(pl.Utf8).fill_null("unknown") for c in LABEL_COLS])
     return df.select(["pid"] + LABEL_COLS)
 
 
 def load_schedules(path: str) -> pl.DataFrame:
     df = pl.read_csv(path)
-    if "hid" in df.columns:
-        df = df.drop("hid")
+    for col in ("hid", "zone", "seq"):
+        if col in df.columns:
+            df = df.drop(col)
+    if "duration" not in df.columns:
+        df = df.with_columns((pl.col("end") - pl.col("start")).alias("duration"))
     return df.sort(["pid", "start"])
 
 

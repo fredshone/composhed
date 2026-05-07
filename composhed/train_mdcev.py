@@ -5,6 +5,7 @@ import os
 import time
 
 import joblib
+from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 
 from composhed.data import (
@@ -36,6 +37,7 @@ def train(attributes_path: str, schedules_path: str, output_dir: str, max_record
 
     X_base, feature_names = encode_features(records, LABEL_COLS)
     print(f"  {len(feature_names)} label features: {feature_names[:5]}...")
+    scaler = StandardScaler().fit(X_base)
 
     steps = ["MDCEV model (biogeme, slow)", "Anchor timing"]
     pbar = tqdm(steps, desc="Training")
@@ -45,7 +47,7 @@ def train(attributes_path: str, schedules_path: str, output_dir: str, max_record
     pbar.update(1)
 
     pbar.set_description(f"Step 2: {steps[1]}")
-    anchor_model = AnchorTimingModel().fit(records, feature_names)
+    anchor_model = AnchorTimingModel().fit(records, feature_names, scaler)
     pbar.update(1)
     pbar.close()
 
@@ -54,6 +56,7 @@ def train(attributes_path: str, schedules_path: str, output_dir: str, max_record
     bundle = {
         "mdcev": mdcev_model,
         "anchor": anchor_model,
+        "scaler": scaler,
         "feature_names": feature_names,
         "label_cols": LABEL_COLS,
     }

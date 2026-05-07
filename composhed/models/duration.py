@@ -22,7 +22,7 @@ class ActivityDurationModel:
 
         X_base, _ = encode_features(slot_records, LABEL_COLS, feature_names=feature_names)
         remaining = np.array(
-            [float(r["remaining_budget"]) for r in slot_records], dtype=np.float64
+            [float(r["remaining_budget"]) / 1440.0 for r in slot_records], dtype=np.float64
         )
         X_all = np.hstack([X_base, remaining.reshape(-1, 1)])
         y_all = np.array([float(r["duration"]) for r in slot_records], dtype=np.float64)
@@ -52,7 +52,7 @@ class ActivityDurationModel:
             return float(np.clip(np.random.exponential(60.0), 10.0, remaining_budget))
         model = self.models_[atype]
         std = self.residual_stds_[atype]
-        x = np.hstack([x_label, [remaining_budget]]).reshape(1, -1)
+        x = np.hstack([x_label, [remaining_budget / 1440.0]]).reshape(1, -1)
         log_pred = model.predict(x)[0]
         dur = np.exp(np.random.normal(log_pred, std))
         return float(np.clip(dur, 10.0, max(10.0, remaining_budget)))

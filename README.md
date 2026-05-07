@@ -31,71 +31,100 @@ uv pip install git+https://github.com/big-ucl/caveat
 
 ## Model overview
 
-Schedule generation proceeds in six sequential steps:
+Both variants share the same **input variables** and **output format**:
 
-1. **Daily Activity Pattern (DAP)** — multinomial logit classifies the day as home-only (`H`), mandatory-only (`W`), mandatory + discretionary (`WD`), or discretionary-only (`D`).
-2. **Mandatory duration** — log-normal OLS predicts work/education activity duration (if DAP ∈ {W, WD}).
-3. **Number of non-mandatory tours** — ordered logit predicts how many discretionary activities occur (if DAP ∈ {WD, D}).
-4. **Activity type per slot** — multinomial logit predicts the type of each discretionary activity (shop, visit, escort, medical, other); separate models for slots 1, 2, and 3+.
-5. **Activity duration per type** — log-normal OLS predicts duration of each discretionary activity, estimated separately per activity type.
-6. **Schedule assembly** — rule-based algorithm anchors timing using KDE-sampled work-start or first-departure times, places activities, and enforces the 24-hour budget.
+**Inputs (conditioning variables):** `age`, `sex`, `employment`, `hh_income`, `hh_zone`, `day`, `vehicles`, `access_egress_distance` — all one-hot encoded, with nulls filled as `"unknown"`.
+
+**Outputs:** A 24-hour sequence of `(activity_type, duration_minutes)` pairs, where activity types are drawn from `{home, work, education, shop, visit, escort, medical, other}` and durations sum to 1440 minutes.
+
+**Scaling:** The core compositional models and the MDCEV model itself use the raw one-hot label encoding. A single `StandardScaler` is fit only for the shared anchor-timing logistic regression, where scaled label features help stabilize the before-work classifier; the fitted scaler is saved in the model bundle and reused at generation time.
+
+---
+
+### Approach 1 — Compositional (baseline)
+
+Six independently-estimated models assembled by a rule-based algorithm:
+
+| Step | Model type | Predicts |
+|------|-----------|---------|
+| 1. DAP classification | Multinomial logit (statsmodels `MNLogit`) | Day structure: home-only (`H`), mandatory-only (`W`), mandatory + discretionary (`WD`), or discretionary-only (`D`) |
+| 2. Mandatory duration | Log-normal OLS (`LinearRegression` on log-duration) | Work/education activity duration in minutes; active if DAP ∈ {W, WD} |
+| 3. Number of tours | Ordered logit (`OrderedModel`) | Count of discretionary activities (0–4); active if DAP ∈ {WD, D} |
+| 4. Activity type per slot | Multinomial logit, separate models for slots 1, 2, 3+ | Discretionary activity type: shop, visit, escort, medical, or other |
+| 5. Activity duration per type | Log-normal OLS, separate model per activity type | Duration of each discretionary activity |
+| 6. Schedule assembly | KDE + rule-based algorithm | Work-start / first-departure timing (KDE per employment category); home-time split (Beta distribution); before/after-work placement (logistic regression on scaled label features) |
 
 Every step samples stochastically from predicted distributions (never argmax) to preserve distributional diversity across identical inputs.
 
-## Data
+---
 
-Expected input format:
+### Approach 2 — MDCEV variant
 
-- **Attributes csv** — one row per person with columns: `pid`, `gender`, `age`, `car_access`, `work_status`, `household_income`
-- **Schedules csv** — NTS schedules as sequences of activities, with types and durations, adding to 24 hours
+A single Multiple Discrete-Continuous Extreme Value (MDCEV) model estimated with Biogeme replaces Steps 1–5. It jointly predicts time allocation across all 8 activity types simultaneously, then the same Step 6 assembly algorithm places activities in time.
 
-The pre-processing pipeline for NTS data is available from [Caveat](https://github.com/big-ucl/caveat) as an [exaple notebook](https://github.com/big-ucl/caveat/tree/main/examples).
+| Component | Model type | Predicts |
+|-----------|-----------|---------|
+| Time allocation | MDCEV GammaProfile (Biogeme + PyTorch sampling) | Minutes allocated to each activity type in one joint pass; a zero allocation means the type is not participated in |
+| Schedule assembly | KDE + rule-based algorithm (same as compositional) | Timing, ordering, and 24-hour budget enforcement; still uses the shared scaled anchor-timing classifier |
+
+The MDCEV approach captures correlations between activity type choices and durations that the compositional pipeline treats as independent. The trade-off is less interpretable per-step coefficients and a dependency on Biogeme's MDCEV estimation.
 
 ## Usage
 
 `uv run` uses the project's `.venv` automatically — no need to activate it manually.
 
-**Train** all six sub-models (original compositional model):
+**Train** all six sub-models (compositional):
 
 ```bash
 uv run compsched-train \
-  --attributes tmp/nts_attributes_2023.csv \
-  --schedules tmp/nts_schedules_2023.csv \
+  --attributes /home/fred/Data/foundata/out/nts/2023/attributes_binned.csv \
+  --schedules /home/fred/Data/foundata/out/nts/2023/activities.csv \
   --output-dir models/
 ```
 
-This saves a single bundle to `models/composhed_models.pkl`.
+Saves to `models/composhed_models.pkl`.
 
-**Generate** synthetic schedules (original model):
+**Generate** synthetic schedules (compositional):
 
 ```bash
-python -m composhed.generate \
-  --attributes data/processed/attributes.csv \
+uv run compsched-generate \
+  --attributes /home/fred/Data/foundata/out/nts/2023/attributes_binned.csv \
   --models models/composhed_models.pkl \
-  --out-attributes output/synthetic_attributes.csv \
-  --out-schedules output/synthetic_schedules.csv
+  --out-attributes synthetic_attributes.csv \
+  --out-schedules synthetic_schedules.csv
 ```
 
 **Train** the MDCEV variant:
 
 ```bash
 uv run compsched-train-mdcev \
-  --attributes tmp/nts_attributes_2023.csv \
-  --schedules tmp/nts_schedules_2023.csv \
+  --attributes /home/fred/Data/foundata/out/nts/2023/attributes_binned.csv \
+  --schedules /home/fred/Data/foundata/out/nts/2023/activities.csv \
   --output-dir models/
 ```
+
+Saves to `models/mdcev_models.pkl`.
 
 **Generate** synthetic schedules (MDCEV variant):
 
 ```bash
 uv run compsched-generate-mdcev \
-  --attributes tmp/nts_attributes_2023.csv \
+  --attributes /home/fred/Data/foundata/out/nts/2023/attributes_binned.csv \
   --models models/mdcev_models.pkl \
-  --out-attributes output/synthetic_mdcev_attributes.csv \
-  --out-schedules output/synthetic_mdcev_schedules.csv
+  --out-attributes synthetic_mdcev_attributes.csv \
+  --out-schedules synthetic_mdcev_schedules.csv
 ```
 
-Output csvs have columns `pid, act, start, end, duration` (schedules) and `pid, gender, age, car_access, work_status, household_income` (attributes), matching the Caveat synthetic data format.
+**Evaluate** against a reference dataset:
+
+```bash
+uv run compsched-evaluate \
+  --target-schedules /home/fred/Data/foundata/out/nts/2023/activities.csv \
+  --modelled-schedules synthetic_schedules.csv synthetic_mdcev_schedules.csv \
+  --output-dir results/
+```
+
+Output CSVs have columns `pid, act, start, end, duration` (schedules) and `pid, age, hh_income, sex, employment, day, hh_zone, access_egress_distance, vehicles` (attributes), matching the Caveat synthetic data format.
 
 ## Latest Results
 

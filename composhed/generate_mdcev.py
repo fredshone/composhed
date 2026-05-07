@@ -46,14 +46,14 @@ def generate(
     sched_rows: list[dict] = []
 
     for i, pid in tqdm(enumerate(pids), total=n, desc="Assembling"):
-        work_status = str(attr_rows[i]["work_status"])
+        employment = str(attr_rows[i]["employment"])
 
         try:
             rows = _generate_one(
                 pid=pid,
                 alloc=all_allocs[i],
                 x_label=X_all[i],
-                work_status=work_status,
+                employment=employment,
                 anchor_model=anchor_model,
             )
         except Exception as exc:
@@ -79,7 +79,7 @@ def _generate_one(
     pid: int,
     alloc: dict[str, float],
     x_label: np.ndarray,
-    work_status: str,
+    employment: str,
     anchor_model,
 ) -> list[dict]:
     """Generate a schedule for one person given a pre-sampled MDCEV allocation."""
@@ -113,11 +113,11 @@ def _generate_one(
     first_departure = None
 
     if dap in ("W", "WD"):
-        work_start = anchor_model.sample_work_start(work_status)
+        work_start = anchor_model.sample_work_start(employment)
         work_start = float(np.clip(work_start, 0.0, 1440.0 - mandatory_duration - 60.0))
 
     if dap == "D":
-        first_departure = anchor_model.sample_first_departure(work_status)
+        first_departure = anchor_model.sample_first_departure(employment)
 
     # ---- 6. Before-work flags (WD only) -------------------------------------
     before_work_flags: list[bool] = []
