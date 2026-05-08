@@ -4,7 +4,7 @@ A compositional baseline model for 24-hour activity schedule generation, built a
 
 ## What it is
 
-Composhed is an econometric activity-scheduling model estimated from the UK National Travel Survey (NTS). It generates synthetic 24-hour sequences of `(activity_type, duration)` pairs, conditioned on person attributes (gender, age, car access, work status, household income). The architecture is explicitly compositional — six separately-estimated statistical models assembled by a rule-based algorithm — making it a concrete comparison against the deep generative approaches in Caveat.
+Composhed is an econometric activity-scheduling model estimated from the UK National Travel Survey (NTS). It generates synthetic 24-hour sequences of `(activity_type, duration)` pairs, conditioned on person attributes (gender, age, car access, work status, household income). The architecture is explicitly compositional - six separately-estimated statistical models assembled by a rule-based algorithm - making it a concrete comparison against the deep generative approaches in Caveat.
 
 It is loosely inspired by CEMDAP/DaySim-style tour-based models, deliberately simplified to the same scope as Caveat: activity type and duration only, no location or mode choice.
 
@@ -12,7 +12,7 @@ It is loosely inspired by CEMDAP/DaySim-style tour-based models, deliberately si
 
 ## Compositional baseline
 
-Compositional follows the sequential tour-based paradigm of DaySim (Bowman & Ben-Akiva, 2001) and CEMDAP (Bhat et al., 2004), decomposing schedule generation into a hierarchy of independently estimated sub-models — multinomial logit for daily activity pattern and activity type, ordered logit for number of tours, and log-normal OLS regression for durations — assembled into valid 24-hour sequences by a rule-based algorithm. The architecture most closely mirrors actiTopp (Hilgert et al., 2017), a stepwise regression approach to daily schedule generation applied to German national travel survey data.
+CompSched follows the sequential tour-based paradigm of DaySim (Bowman & Ben-Akiva, 2001) and CEMDAP (Bhat et al., 2004), decomposing schedule generation into a hierarchy of independently estimated sub-models - multinomial logit for daily activity pattern and activity type, ordered logit for number of tours, and log-normal OLS regression for durations - assembled into valid 24-hour sequences by a rule-based algorithm. The architecture follows DaySim and CEMDAP most directly, applying the same sequential discrete choice hierarchy to 24-hour schedules. actiTopp (Hilgert et al., 2017) is architecturally similar in its stepwise regression approach but generates weekly rather than daily schedules.
 
 ## MDCEV variant
 
@@ -53,7 +53,7 @@ uv pip install git+https://github.com/big-ucl/caveat
 
 Both variants share the same **input variables** and **output format**:
 
-**Inputs (conditioning variables):** `age`, `sex`, `employment`, `hh_income`, `hh_zone`, `day`, `vehicles`, `access_egress_distance` — all one-hot encoded, with nulls filled as `"unknown"`.
+**Inputs (conditioning variables):** `age`, `sex`, `employment`, `hh_income`, `hh_zone`, `day`, `vehicles`, `access_egress_distance` - all one-hot encoded, with nulls filled as `"unknown"`.
 
 **Outputs:** A 24-hour sequence of `(activity_type, duration_minutes)` pairs, where activity types are drawn from `{home, work, education, shop, visit, escort, medical, other}` and durations sum to 1440 minutes.
 
@@ -61,7 +61,7 @@ Both variants share the same **input variables** and **output format**:
 
 ---
 
-### Approach 1 — Compositional (baseline)
+### Approach 1 - Compositional (baseline)
 
 Six independently-estimated models assembled by a rule-based algorithm:
 
@@ -78,7 +78,7 @@ Every step samples stochastically from predicted distributions (never argmax) to
 
 ---
 
-### Approach 2 — MDCEV variant
+### Approach 2 - MDCEV variant
 
 A single Multiple Discrete-Continuous Extreme Value (MDCEV) model estimated with Biogeme replaces Steps 1–5. It jointly predicts time allocation across all 8 activity types simultaneously, then the same Step 6 assembly algorithm places activities in time.
 
@@ -91,7 +91,7 @@ The MDCEV approach captures correlations between activity type choices and durat
 
 ## Usage
 
-`uv run` uses the project's `.venv` automatically — no need to activate it manually.
+`uv run` uses the project's `.venv` automatically - no need to activate it manually.
 
 **Train** all six sub-models (compositional):
 
