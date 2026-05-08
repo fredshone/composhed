@@ -8,6 +8,26 @@ Composhed is an econometric activity-scheduling model estimated from the UK Nati
 
 It is loosely inspired by CEMDAP/DaySim-style tour-based models, deliberately simplified to the same scope as Caveat: activity type and duration only, no location or mode choice.
 
+# Model Descriptions
+
+## Compositional baseline
+
+Compositional follows the sequential tour-based paradigm of DaySim (Bowman & Ben-Akiva, 2001) and CEMDAP (Bhat et al., 2004), decomposing schedule generation into a hierarchy of independently estimated sub-models — multinomial logit for daily activity pattern and activity type, ordered logit for number of tours, and log-normal OLS regression for durations — assembled into valid 24-hour sequences by a rule-based algorithm. The architecture most closely mirrors actiTopp (Hilgert et al., 2017), a stepwise regression approach to daily schedule generation applied to German national travel survey data.
+
+## MDCEV variant
+
+The MDCEV variant replaces the five sequential sub-models with a single Multiple Discrete-Continuous Extreme Value model (Bhat, 2005; 2008), estimated using Biogeme (Bierlaire, 2003). MDCEV treats 24-hour time allocation as a simultaneous portfolio choice, jointly predicting both activity participation and duration within a fixed 1 to 440-minute budget, before passing outputs to the same assembly step as the compositional baseline.
+
+## References
+
+- Bowman, J.L. & Ben-Akiva, M.E. (2001). Activity-based disaggregate travel demand model system with activity schedules. *Transportation Research Part A*, 35(1), 1–28.
+- Bhat, C.R., Guo, J.Y., Srinivasan, S. & Sivakumar, A. (2004). Comprehensive econometric microsimulator for daily activity-travel patterns. *Transportation Research Record*, 1894, 57–66.
+- Hilgert, T., Heilig, M., Kagerbauer, M. & Vortisch, P. (2017). Modeling week activity schedules for travel demand models. *Transportation Research Record*, 2666, 69–77.
+- Bhat, C.R. (2005). A multiple discrete-continuous extreme value model: formulation and application to discretionary time-use decisions. *Transportation Research Part B*, 39(8), 679–707.
+- Bhat, C.R. (2008). The multiple discrete-continuous extreme value (MDCEV) model: role of utility function parameters, identification considerations, and model extensions. *Transportation Research Part B*, 42(3), 274–303.
+- Bierlaire, M. (2003). BIOGEME: a free package for the estimation of discrete choice models. *Proceedings of the 3rd Swiss Transportation Research Conference (STRC)*, Ascona, Switzerland.
+
+
 ## Install
 
 ```bash
