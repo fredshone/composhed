@@ -1,8 +1,9 @@
 """Train all Composhed models and save to disk."""
 
-import argparse
 import os
 import time
+
+import click
 
 import joblib
 import numpy as np
@@ -138,13 +139,17 @@ def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
     print(f"\nModels saved to {out_path} ({time.time()-t0:.1f}s)")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Train Composhed models")
-    parser.add_argument("--attributes", required=True)
-    parser.add_argument("--schedules", required=True)
-    parser.add_argument("--output-dir", default="models")
-    args = parser.parse_args()
-    train(args.attributes, args.schedules, args.output_dir)
+@click.command()
+@click.option("--attributes", required=True, type=click.Path(exists=True))
+@click.option("--schedules", required=True, type=click.Path(exists=True))
+@click.option("--output-dir", default="models", show_default=True)
+@click.option("--seed", default=None, type=int, help="Random seed")
+def main(attributes: str, schedules: str, output_dir: str, seed: int | None) -> None:
+    if seed is not None:
+        import random
+        np.random.seed(seed)
+        random.seed(seed)
+    train(attributes, schedules, output_dir)
 
 
 if __name__ == "__main__":

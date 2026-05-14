@@ -1,7 +1,6 @@
 """Generate synthetic schedules for all persons in an attributes file."""
 
-import argparse
-
+import click
 import joblib
 import numpy as np
 import polars as pl
@@ -201,14 +200,18 @@ def _write_csv_with_index(df: pl.DataFrame, path: str) -> None:
         f.write(content)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate Composhed synthetic schedules")
-    parser.add_argument("--attributes", required=True)
-    parser.add_argument("--models", required=True)
-    parser.add_argument("--out-attributes", default="synthetic_attributes.csv")
-    parser.add_argument("--out-schedules", default="synthetic_schedules.csv")
-    args = parser.parse_args()
-    generate(args.attributes, args.models, args.out_attributes, args.out_schedules)
+@click.command()
+@click.option("--attributes", required=True, type=click.Path(exists=True))
+@click.option("--models", required=True, type=click.Path(exists=True))
+@click.option("--out-attributes", default="synthetic_attributes.csv", show_default=True)
+@click.option("--out-schedules", default="synthetic_schedules.csv", show_default=True)
+@click.option("--seed", default=None, type=int, help="Random seed")
+def main(attributes: str, models: str, out_attributes: str, out_schedules: str, seed: int | None) -> None:
+    if seed is not None:
+        import random
+        np.random.seed(seed)
+        random.seed(seed)
+    generate(attributes, models, out_attributes, out_schedules)
 
 
 if __name__ == "__main__":

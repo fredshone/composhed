@@ -1,8 +1,9 @@
 """Train MDCEV CompSched variant and save to disk."""
 
-import argparse
 import os
 import time
+
+import click
 
 import joblib
 from sklearn.preprocessing import StandardScaler
@@ -31,7 +32,6 @@ def train(attributes_path: str, schedules_path: str, output_dir: str, max_record
 
     if max_records is not None and len(records) > max_records:
         import random
-        random.seed(42)
         records = random.sample(records, max_records)
         print(f"  Subsampled to {max_records} persons for MDCEV estimation")
 
@@ -65,14 +65,19 @@ def train(attributes_path: str, schedules_path: str, output_dir: str, max_record
     print(f"\nModels saved to {out_path} ({time.time() - t0:.1f}s)")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Train MDCEV CompSched variant")
-    parser.add_argument("--attributes", required=True)
-    parser.add_argument("--schedules", required=True)
-    parser.add_argument("--output-dir", default="models")
-    parser.add_argument("--max-records", type=int, default=5000)
-    args = parser.parse_args()
-    train(args.attributes, args.schedules, args.output_dir, args.max_records)
+@click.command()
+@click.option("--attributes", required=True, type=click.Path(exists=True))
+@click.option("--schedules", required=True, type=click.Path(exists=True))
+@click.option("--output-dir", default="models", show_default=True)
+@click.option("--max-records", default=5000, show_default=True, type=int)
+@click.option("--seed", default=None, type=int, help="Random seed")
+def main(attributes: str, schedules: str, output_dir: str, max_records: int, seed: int | None) -> None:
+    if seed is not None:
+        import random
+        import numpy as np
+        np.random.seed(seed)
+        random.seed(seed)
+    train(attributes, schedules, output_dir, max_records)
 
 
 if __name__ == "__main__":
