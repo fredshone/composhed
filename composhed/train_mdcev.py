@@ -17,6 +17,7 @@ from composhed.data import (
     load_schedules,
 )
 from composhed.models.anchor import AnchorTimingModel
+from composhed.models.episodes import EpisodeCountModel
 from composhed.models.mdcev import MDCEVModel
 
 
@@ -39,7 +40,7 @@ def train(attributes_path: str, schedules_path: str, output_dir: str, max_record
     print(f"  {len(feature_names)} label features: {feature_names[:5]}...")
     scaler = StandardScaler().fit(X_base)
 
-    steps = ["MDCEV model (biogeme, slow)", "Anchor timing"]
+    steps = ["MDCEV model (biogeme, slow)", "Anchor timing", "Episode counts"]
     pbar = tqdm(steps, desc="Training")
 
     pbar.set_description(f"Step 1: {steps[0]}")
@@ -49,6 +50,10 @@ def train(attributes_path: str, schedules_path: str, output_dir: str, max_record
     pbar.set_description(f"Step 2: {steps[1]}")
     anchor_model = AnchorTimingModel().fit(records, feature_names, scaler)
     pbar.update(1)
+
+    pbar.set_description(f"Step 3: {steps[2]}")
+    episode_model = EpisodeCountModel().fit(records)
+    pbar.update(1)
     pbar.close()
 
     # ---- Save -------------------------------------------------------------
@@ -56,6 +61,7 @@ def train(attributes_path: str, schedules_path: str, output_dir: str, max_record
     bundle = {
         "mdcev": mdcev_model,
         "anchor": anchor_model,
+        "episodes": episode_model,
         "scaler": scaler,
         "feature_names": feature_names,
         "label_cols": LABEL_COLS,

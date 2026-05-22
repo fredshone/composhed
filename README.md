@@ -12,8 +12,8 @@ Two variants are implemented:
 
 | Variant | Steps 1–5 | Step 6 |
 |---------|-----------|--------|
-| **Compositional** (baseline) | Five sequential sub-models (MNL, ordered logit, log-normal OLS) | Rule-based assembly |
-| **MDCEV** | Single joint time-allocation model (Biogeme + PyTorch) | Same rule-based assembly |
+| **Compositional** (baseline) | Five sequential sub-models (MNL, ordered logit, log-normal OLS) | Rule-based assembly with budget rescaling |
+| **MDCEV** | Single joint time-allocation model (Biogeme + PyTorch) | MDCEV-specific assembly — no rescaling; episode splitting per activity type |
 
 ---
 
@@ -44,7 +44,17 @@ Every step samples stochastically from predicted distributions (never argmax) to
 
 ### MDCEV variant
 
-A single Multiple Discrete-Continuous Extreme Value (MDCEV) model (Bhat, 2005; 2008), estimated with Biogeme (Bierlaire, 2003), replaces Steps 1–5. It jointly predicts time allocation across all 8 activity types simultaneously — zero allocation means that type is not participated in — then passes outputs to the same Step 6 assembly algorithm.
+A single Multiple Discrete-Continuous Extreme Value (MDCEV) model (Bhat, 2005; 2008), estimated with Biogeme (Bierlaire, 2003), replaces Steps 1–5. It jointly predicts time allocation across all 8 activity types simultaneously — zero allocation means that type is not participated in.
+
+The MDCEV output (durations summing exactly to 1440 minutes) is passed to a dedicated assembly step that differs from the compositional pipeline:
+
+| Assembly element | Behaviour |
+|---|---|
+| Non-home durations | Taken verbatim from MDCEV — never rescaled |
+| Home time | Computed as `1440 − sum(non-home)` and split around the anchor start |
+| Anchor timing | KDE per employment category, same as compositional (now covers work and education) |
+| Episode splitting | `EpisodeCountModel`: Poisson regression per type gives n episodes; total duration is divided among them |
+| Before/after placement | Logistic regression per episode, same as compositional |
 
 The MDCEV approach captures correlations between activity participation and duration that the compositional pipeline treats as independent. The trade-off is less interpretable per-step coefficients and a dependency on Biogeme's MDCEV estimation.
 

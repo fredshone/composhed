@@ -6,11 +6,9 @@ import numpy as np
 import polars as pl
 from tqdm import tqdm
 
-from composhed.assembly import assemble_schedule
+from composhed.assembly import assemble_mdcev_schedule
 from composhed.data import (
     LABEL_COLS,
-    MANDATORY_ACTS,
-    DISC_ACTS,
     classify_dap,
     encode_for_generation,
     load_attributes,
@@ -28,6 +26,7 @@ def generate(
     bundle = joblib.load(models_path)
     mdcev_model = bundle["mdcev"]
     anchor_model = bundle["anchor"]
+    episode_model = bundle["episodes"]
     feature_names: list[str] = bundle["feature_names"]
 
     print("Loading attributes...")
@@ -49,11 +48,11 @@ def generate(
 
         try:
             rows = _generate_one(
-                pid=pid,
                 alloc=all_allocs[i],
                 x_label=X_all[i],
                 employment=employment,
                 anchor_model=anchor_model,
+                episode_model=episode_model,
             )
         except Exception as exc:
             tqdm.write(f"  WARNING pid={pid}: {exc}; using fallback H schedule")
@@ -75,65 +74,27 @@ def generate(
 
 
 def _generate_one(
-    pid: int,
     alloc: dict[str, float],
     x_label: np.ndarray,
     employment: str,
     anchor_model,
+    episode_model,
 ) -> list[dict]:
-    """Generate a schedule for one person given a pre-sampled MDCEV allocation."""
+    """Assemble a schedule for one person from a pre-sampled MDCEV allocation."""
+    # Derive DAP from which activity types received > 1 min
+    participated = [atype for atype, dur in alloc.items() if atype != "home" and dur > 1.0]
+    dap = classify_dap(participated)
 
-    t = alloc
+    mandatory_type = "education" if dap in ("E", "ED") else "work"
 
-    # ---- 2. Derive chosen activities (threshold > 1 min) --------------------
-    chosen = [(atype, dur) for atype, dur in t.items() if atype != "home" and dur > 1.0]
-
-    # ---- 3. Derive DAP -------------------------------------------------------
-    act_types = [a for a, _ in chosen]
-    dap = classify_dap(act_types)
-
-    if dap == "H":
-        return assemble_schedule("H", 0, "home", [], None, None, [])
-
-    # ---- 4. Split mandatory / discretionary ---------------------------------
-    mandatory_acts = [(a, dur) for a, dur in chosen if a in MANDATORY_ACTS]
-    disc_activities = [(a, max(1, round(dur))) for a, dur in chosen if a in DISC_ACTS]
-
-    # Combine work + education into a single mandatory block; use dominant type
-    mandatory_duration = sum(dur for _, dur in mandatory_acts)
-    if mandatory_acts:
-        mandatory_type = max(mandatory_acts, key=lambda x: x[1])[0]
-    else:
-        mandatory_type = "work"
-    mandatory_duration = max(1, round(mandatory_duration))
-
-    # ---- 5. Anchor timing ---------------------------------------------------
-    work_start = None
-    first_departure = None
-
-    if dap in ("W", "WD"):
-        work_start = anchor_model.sample_work_start(employment)
-        work_start = float(np.clip(work_start, 0.0, 1440.0 - mandatory_duration - 60.0))
-
-    if dap == "D":
-        first_departure = anchor_model.sample_first_departure(employment)
-
-    # ---- 6. Before-work flags (WD only) -------------------------------------
-    before_work_flags: list[bool] = []
-    if dap == "WD" and disc_activities and work_start is not None:
-        before_work_flags = anchor_model.sample_before_work_flags(
-            x_label, disc_activities, work_start
-        )
-
-    # ---- 7. Assemble schedule -----------------------------------------------
-    return assemble_schedule(
+    return assemble_mdcev_schedule(
+        alloc=alloc,
         dap=dap,
-        mandatory_duration=mandatory_duration,
         mandatory_type=mandatory_type,
-        disc_activities=disc_activities,
-        work_start=work_start,
-        first_departure=first_departure,
-        before_work_flags=before_work_flags,
+        x_label=x_label,
+        employment=employment,
+        anchor_model=anchor_model,
+        episode_model=episode_model,
     )
 
 

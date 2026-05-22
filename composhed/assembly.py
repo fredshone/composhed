@@ -2,6 +2,8 @@
 
 import numpy as np
 
+_MDCEV_DISC_TYPES = ["escort", "medical", "other", "shop", "visit"]
+
 
 def assemble_schedule(
     dap: str,
@@ -95,9 +97,111 @@ def assemble_schedule(
     raise ValueError(f"Unknown DAP: {dap}")
 
 
+def assemble_mdcev_schedule(
+    alloc: dict[str, float],
+    dap: str,
+    mandatory_type: str,
+    x_label: np.ndarray,
+    employment: str,
+    anchor_model,
+    episode_model,
+) -> list[dict]:
+    """Assemble a 1440-min schedule from MDCEV allocations without rescaling.
+
+    Durations for non-home activities are taken verbatim from alloc (rounded to
+    integers). Home time fills the remainder, split around the anchor start time.
+    Sum is guaranteed to equal 1440.
+    """
+    if dap == "H":
+        return _to_rows([("home", 1440)])
+
+    # Round non-home durations; home gets the exact remainder so sum == 1440
+    mandatory = int(round(alloc.get(mandatory_type, 0.0)))
+    disc_durs: dict[str, int] = {
+        atype: int(round(alloc.get(atype, 0.0)))
+        for atype in _MDCEV_DISC_TYPES
+        if alloc.get(atype, 0.0) > 1.0
+    }
+    home_total = 1440 - mandatory - sum(disc_durs.values())
+    home_total = max(0, home_total)
+
+    # Build flat episode list for disc activities
+    disc_episodes: list[tuple[str, int]] = []
+    for atype, dur in disc_durs.items():
+        disc_episodes.extend(_split_duration(atype, dur, episode_model))
+
+    # ---- W / E: home → mandatory → home ------------------------------------
+    if dap in ("W", "E"):
+        ws = int(np.clip(
+            round(anchor_model.sample_work_start(employment)),
+            0, max(0, home_total - 30),
+        ))
+        seq = [("home", ws), (mandatory_type, mandatory), ("home", home_total - ws)]
+        return _to_rows(seq)
+
+    # ---- WD / ED: home → pre → mandatory → post → home --------------------
+    if dap in ("WD", "ED"):
+        # Sample work start conservatively, then refine given pre-work placement
+        ws_raw = int(np.clip(
+            round(anchor_model.sample_work_start(employment)),
+            30, max(30, home_total - 30),
+        ))
+        before_flags = anchor_model.sample_before_work_flags(
+            x_label, disc_episodes, float(ws_raw)
+        )
+        pre, post = _split_by_flags(disc_episodes, before_flags)
+        pre_total = sum(d for _, d in pre)
+
+        # Re-clip ws to ensure home_morning ≥ 30 and home_evening ≥ 30
+        ws_lo = pre_total + 30
+        ws_hi = home_total + pre_total - 30
+        if ws_lo > ws_hi:
+            ws = pre_total + max(0, home_total) // 2
+        else:
+            ws = int(np.clip(ws_raw, ws_lo, ws_hi))
+
+        # If pre no longer fits, move entirely to post
+        if ws - pre_total < 30:
+            post = pre + post
+            pre = []
+            pre_total = 0
+
+        home_morn = ws - pre_total
+        home_eve = home_total - home_morn
+        seq = (
+            [("home", home_morn)]
+            + pre
+            + [(mandatory_type, mandatory)]
+            + post
+            + [("home", home_eve)]
+        )
+        return _to_rows(seq)
+
+    # ---- D: home → disc episodes → home ------------------------------------
+    if dap == "D":
+        fd = int(np.clip(
+            round(anchor_model.sample_first_departure(employment)),
+            0, max(0, home_total - 30),
+        ))
+        seq = [("home", fd)] + disc_episodes + [("home", home_total - fd)]
+        return _to_rows(seq)
+
+    raise ValueError(f"Unknown DAP for MDCEV assembly: {dap}")
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _split_duration(
+    atype: str, total: int, episode_model
+) -> list[tuple[str, int]]:
+    """Split total minutes into n episodes; last episode absorbs rounding."""
+    n = episode_model.sample(atype, float(total))
+    per = total // n
+    last = total - per * (n - 1)
+    return [(atype, per)] * (n - 1) + [(atype, last)]
 
 
 def _enforce_budget(

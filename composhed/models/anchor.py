@@ -32,7 +32,7 @@ class AnchorTimingModel:
         by_status: dict[str, list[float]] = defaultdict(list)
         all_starts: list[float] = []
         for r in records:
-            if r["dap"] in ("W", "WD") and r["work_start"] is not None:
+            if r["dap"] in ("W", "WD", "E", "ED") and r["work_start"] is not None:
                 ws = float(r["work_start"])
                 by_status[str(r["employment"])].append(ws)
                 all_starts.append(ws)
@@ -83,7 +83,7 @@ class AnchorTimingModel:
         y_vals: list[int] = []
 
         for r in records:
-            if r["dap"] != "WD" or not r["disc_activities"]:
+            if r["dap"] not in ("WD", "ED") or not r["disc_activities"]:
                 continue
             ws = r["work_start"]
             flags = r["before_work_flags"]
