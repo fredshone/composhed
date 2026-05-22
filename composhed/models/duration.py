@@ -1,4 +1,4 @@
-"""Step 5 — Non-mandatory activity duration per type (log-normal OLS)."""
+"""Step 5 — Discretionary activity duration per type (log-normal OLS)."""
 
 import numpy as np
 from sklearn.linear_model import LinearRegression

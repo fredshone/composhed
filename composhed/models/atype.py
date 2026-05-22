@@ -1,4 +1,4 @@
-"""Step 4 — Non-mandatory activity type per slot (MNLogit per slot)."""
+"""Step 4 — Discretionary activity type per slot (MNLogit per slot)."""
 
 import numpy as np
 import statsmodels.api as sm

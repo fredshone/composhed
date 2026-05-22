@@ -25,10 +25,10 @@ def assemble_schedule(
         return _to_rows([("home", 1440)])
 
     # ---- Budget enforcement: ensure ≥60 min home ------------------------
-    disc = _enforce_budget(md if dap in ("W", "WD") else 0, disc)
+    disc = _enforce_budget(md if dap in ("W", "WD", "E", "ED") else 0, disc)
 
-    # ---- W: home → work → home ------------------------------------------
-    if dap == "W":
+    # ---- W/E: home → mandatory → home -----------------------------------
+    if dap in ("W", "E"):
         ws = int(np.clip(round(work_start or 480), 0, 1440 - md - 60))
         home_eve = 1440 - ws - md
         if home_eve < 30:
@@ -37,8 +37,8 @@ def assemble_schedule(
         seq = [("home", ws), (mandatory_type, md), ("home", home_eve)]
         return _to_rows(seq)
 
-    # ---- WD: home → pre-work → work → post-work → home -----------------
-    if dap == "WD":
+    # ---- WD/ED: home → pre-mandatory → mandatory → post-mandatory → home
+    if dap in ("WD", "ED"):
         ws = int(np.clip(round(work_start or 480), 30, 1440 - md - 30))
         pre, post = _split_by_flags(disc, before_work_flags)
 

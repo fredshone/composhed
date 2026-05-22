@@ -66,13 +66,16 @@ def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
     # ---- Step 2: Mandatory duration --------------------------------------------
     pbar.set_description(f"Step 2: {steps[1]}")
     print(f"\nStep 2: Mandatory duration", flush=True)
-    mand_records = [r for r in records if r["dap"] in ("W", "WD")]
+    mand_records = [r for r in records if r["dap"] in ("W", "WD", "E", "ED")]
     if mand_records:
         X_mand, _ = encode_features(mand_records, LABEL_COLS, feature_names=feature_names)
         dap_WD_col = np.array(
-            [1.0 if r["dap"] == "WD" else 0.0 for r in mand_records]
+            [1.0 if r["dap"] in ("WD", "ED") else 0.0 for r in mand_records]
         ).reshape(-1, 1)
-        X_mand = np.hstack([X_mand, dap_WD_col])
+        is_edu_col = np.array(
+            [1.0 if r["dap"] in ("E", "ED") else 0.0 for r in mand_records]
+        ).reshape(-1, 1)
+        X_mand = np.hstack([X_mand, dap_WD_col, is_edu_col])
         y_mand = np.array([r["mandatory_duration"] for r in mand_records])
         mand_model = MandatoryDurationModel().fit(X_mand, y_mand)
     else:
@@ -82,11 +85,11 @@ def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
     # ---- Step 3: Number of disc tours -----------------------------------------
     pbar.set_description(f"Step 3: {steps[2]}")
     print(f"\nStep 3: N disc tours", flush=True)
-    disc_records = [r for r in records if r["dap"] in ("WD", "D")]
+    disc_records = [r for r in records if r["dap"] in ("WD", "ED", "D")]
     if disc_records:
         X_disc, _ = encode_features(disc_records, LABEL_COLS, feature_names=feature_names)
         dap_WD_col = np.array(
-            [1.0 if r["dap"] == "WD" else 0.0 for r in disc_records]
+            [1.0 if r["dap"] in ("WD", "ED") else 0.0 for r in disc_records]
         ).reshape(-1, 1)
         rem_budget = np.array(
             [

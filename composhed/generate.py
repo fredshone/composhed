@@ -109,28 +109,29 @@ def _generate_one(
 
     # ---- Step 2: Mandatory duration -----------------------------------------
     mandatory_duration = 0.0
-    mandatory_type = "work"
+    mandatory_type = "education" if dap in ("E", "ED") else "work"
     work_start = None
 
-    if dap in ("W", "WD"):
+    if dap in ("W", "WD", "E", "ED"):
         if mand_model is not None:
-            dap_WD = np.array([[1.0 if dap == "WD" else 0.0]])
-            x_mand = np.hstack([x_label.reshape(1, -1), dap_WD])
+            dap_WD = np.array([[1.0 if dap in ("WD", "ED") else 0.0]])
+            is_edu = np.array([[1.0 if dap in ("E", "ED") else 0.0]])
+            x_mand = np.hstack([x_label.reshape(1, -1), dap_WD, is_edu])
             mandatory_duration = float(mand_model.sample(x_mand)[0])
         else:
             mandatory_duration = 480.0
 
-        # Anchor: work start
+        # Anchor: mandatory activity start
         work_start = anchor_model.sample_work_start(employment)
-        # Ensure work fits in day
+        # Ensure mandatory activity fits in day
         work_start = float(np.clip(work_start, 0.0, 1440.0 - mandatory_duration - 60.0))
 
     # ---- Step 3: Number of disc tours ---------------------------------------
     disc_activities: list[tuple[str, int]] = []
 
-    if dap in ("WD", "D"):
+    if dap in ("WD", "ED", "D"):
         if ntours_model is not None:
-            dap_WD = np.array([[1.0 if dap == "WD" else 0.0]])
+            dap_WD = np.array([[1.0 if dap in ("WD", "ED") else 0.0]])
             remaining_budget = (
                 1440.0 - mandatory_duration - mean_home.get(dap, 400.0)
             )
@@ -153,7 +154,7 @@ def _generate_one(
             atype = atype_model.sample_slot(
                 x_label,
                 slot=slot_key,
-                dap_WD=int(dap == "WD"),
+                dap_WD=int(dap in ("WD", "ED")),
                 slot_numeric=slot_numeric,
                 remaining_budget=remaining,
             )
@@ -167,9 +168,9 @@ def _generate_one(
     if dap == "D":
         first_departure = anchor_model.sample_first_departure(employment)
 
-    # ---- Step 6b: Before-work flags (WD only) --------------------------------
+    # ---- Step 6b: Before-mandatory flags (WD and ED only) -------------------
     before_work_flags: list[bool] = []
-    if dap == "WD" and disc_activities and work_start is not None:
+    if dap in ("WD", "ED") and disc_activities and work_start is not None:
         before_work_flags = anchor_model.sample_before_work_flags(
             x_label, disc_activities, work_start
         )

@@ -1,4 +1,4 @@
-"""Step 3 — Number of non-mandatory tours (ordered logit)."""
+"""Step 3 — Number of discretionary tours (ordered logit)."""
 
 import warnings
 

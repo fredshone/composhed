@@ -6,9 +6,9 @@ from statsmodels.discrete.discrete_model import MNLogit
 
 
 class DAPModel:
-    """MNLogit classifier for DAP type: D / H / W / WD."""
+    """MNLogit classifier for DAP type: D / E / ED / H / W / WD."""
 
-    CLASSES = ["D", "H", "W", "WD"]  # indices 0–3
+    CLASSES = ["D", "E", "ED", "H", "W", "WD"]
 
     def fit(self, X: np.ndarray, y_labels: list[str]) -> "DAPModel":
         # Only use classes that actually appear in the training data

@@ -26,14 +26,16 @@ def load_schedules(path: str) -> pl.DataFrame:
 
 def classify_dap(acts: list[str]) -> str:
     act_set = set(acts)
-    has_mandatory = bool(act_set & MANDATORY_ACTS)
+    has_work = "work" in act_set
+    has_edu = "education" in act_set
+    has_mandatory = has_work or has_edu
     has_disc = bool(act_set & DISC_ACTS)
     if not has_mandatory and not has_disc:
         return "H"
     elif has_mandatory and not has_disc:
-        return "W"
+        return "W" if has_work else "E"
     elif has_mandatory and has_disc:
-        return "WD"
+        return "WD" if has_work else "ED"
     else:
         return "D"
 
@@ -97,9 +99,9 @@ def build_training_dataset(
         home_morning = int(home_rows[0]["duration"]) if home_rows else 0
         home_ratio = home_morning / total_home if total_home > 0 else 0.5
 
-        # Before-work flags (WD only)
+        # Before-work flags (WD and ED only)
         before_work_flags: list[bool] = []
-        if dap == "WD" and work_start is not None:
+        if dap in ("WD", "ED") and work_start is not None:
             before_work_flags = [start < work_start for _, _, start in disc_raw]
 
         # Disc slot records (for atype and duration models)
@@ -119,7 +121,7 @@ def build_training_dataset(
                     "atype": atype,
                     "duration": dur,
                     "dap": dap,
-                    "dap_WD": int(dap == "WD"),
+                    "dap_WD": int(dap in ("WD", "ED")),
                     **label_vals,
                 }
             )

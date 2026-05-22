@@ -33,9 +33,9 @@ Follows the sequential tour-based paradigm of DaySim (Bowman & Ben-Akiva, 2001) 
 
 | Step | Model | Predicts |
 |------|-------|----------|
-| 1. DAP classification | Multinomial logit (`MNLogit`) | Day structure: home-only `H`, mandatory-only `W`, mandatory + discretionary `WD`, or discretionary-only `D` |
-| 2. Mandatory duration | Log-normal OLS | Work/education duration in minutes; active if DAP ∈ {W, WD} |
-| 3. Number of tours | Ordered logit (`OrderedModel`) | Count of discretionary activities (0–4); active if DAP ∈ {WD, D} |
+| 1. DAP classification | Multinomial logit (`MNLogit`) | Day structure: home-only `H`, work-only `W`, work + discretionary `WD`, education-only `E`, education + discretionary `ED`, or discretionary-only `D` |
+| 2. Mandatory duration | Log-normal OLS | Work/education duration in minutes; active if DAP ∈ {W, WD, E, ED}; conditioned on person features plus two DAP flags: `dap_WD` (has discretionary) and `is_education` (education vs work) |
+| 3. Number of tours | Ordered logit (`OrderedModel`) | Count of discretionary activities (0–4); active if DAP ∈ {WD, ED, D} |
 | 4. Activity type per slot | Multinomial logit, separate models for slots 1, 2, 3+ | Discretionary activity type: shop, visit, escort, medical, or other |
 | 5. Activity duration per type | Log-normal OLS, separate model per activity type | Duration of each discretionary activity |
 | 6. Schedule assembly | KDE + rule-based algorithm | Work-start / first-departure timing (KDE per employment category); home-time split (Beta distribution); before/after-work placement (logistic regression) |
