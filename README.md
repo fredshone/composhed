@@ -25,7 +25,7 @@ Both variants share the same **input variables** and **output format**.
 
 **Outputs:** A 24-hour sequence of `(activity_type, duration_minutes)` pairs, where activity types are drawn from `{home, work, education, shop, visit, escort, medical, other}` and durations sum to 1440 minutes.
 
-**Scaling:** The core models use raw one-hot encoding. A `StandardScaler` is fit only for the shared anchor-timing logistic regression (before-work placement classifier); the fitted scaler is saved in the model bundle and reused at generation time.
+**Scaling:** The core models use raw one-hot encoding. A `StandardScaler` is fit only for the shared anchor-timing models (tour placement classifier and D-schedule tour grouping classifier); the fitted scaler is saved in the model bundle and reused at generation time.
 
 ### Compositional baseline
 
@@ -38,7 +38,7 @@ Follows the sequential tour-based paradigm of DaySim (Bowman & Ben-Akiva, 2001) 
 | 3. Number of tours | Ordered logit (`OrderedModel`) | Count of discretionary activities (0–4); active if DAP ∈ {WD, ED, D} |
 | 4. Activity type per slot | Multinomial logit, separate models for slots 1, 2, 3+ | Discretionary activity type: shop, visit, escort, medical, or other |
 | 5. Activity duration per type | Log-normal OLS, separate model per activity type | Duration of each discretionary activity |
-| 6. Schedule assembly | KDE + rule-based algorithm | Work-start / first-departure timing (KDE per employment category); home-time split (Beta distribution); before/after-work placement (logistic regression) |
+| 6. Schedule assembly | KDE + 4-class MNL + binary logistic + rule-based algorithm | Work-start / first-departure timing (KDE per employment category); tour placement (4-class MNL: mandatory outbound stop, mandatory inbound stop, separate pre-work tour, separate post-work tour); D-schedule tour grouping (binary logistic: same tour vs. new tour per consecutive activity pair); inter-tour home episodes (`HOME_INTER = 10 min`) |
 
 Every step samples stochastically from predicted distributions (never argmax) to preserve distributional diversity across identical inputs.
 
@@ -50,11 +50,11 @@ The MDCEV output (durations summing exactly to 1440 minutes) is passed to a dedi
 
 | Assembly element | Behaviour |
 |---|---|
-| Non-home durations | Taken verbatim from MDCEV — never rescaled |
-| Home time | Computed as `1440 − sum(non-home)` and split around the anchor start |
+| Non-home durations | Taken verbatim from MDCEV; proportionally rescaled only if total home time would fall below 60 min |
+| Home time | Computed as `1440 − sum(non-home)` (≥ 60 min enforced) and split around the anchor start |
 | Anchor timing | KDE per employment category, same as compositional (now covers work and education) |
 | Episode splitting | `EpisodeCountModel`: Poisson regression per type gives n episodes; total duration is divided among them |
-| Before/after placement | Logistic regression per episode, same as compositional |
+| Tour placement | 4-class MNL per episode (mandatory outbound/inbound stop or separate pre/post tour), same model as compositional |
 
 The MDCEV approach captures correlations between activity participation and duration that the compositional pipeline treats as independent. The trade-off is less interpretable per-step coefficients and a dependency on Biogeme's MDCEV estimation.
 
@@ -85,14 +85,12 @@ uv pip install git+https://github.com/big-ucl/caveat
 
 ## Usage
 
-`uv run` uses the project's `.venv` automatically — no need to activate it manually.
-
 ### Train
 
 **Compositional baseline:**
 
 ```bash
-uv run compsched-train \
+uv run composhed-train \
   --attributes /path/to/attributes_binned.csv \
   --schedules /path/to/activities.csv \
   --output-dir models/
@@ -103,7 +101,7 @@ Saves to `models/composhed_models.pkl`.
 **MDCEV variant:**
 
 ```bash
-uv run compsched-train-mdcev \
+uv run composhed-train-mdcev \
   --attributes /path/to/attributes_binned.csv \
   --schedules /path/to/activities.csv \
   --output-dir models/
@@ -116,7 +114,7 @@ Saves to `models/mdcev_models.pkl`.
 **Compositional baseline:**
 
 ```bash
-uv run compsched-generate \
+uv run composhed-generate \
   --attributes /path/to/attributes_binned.csv \
   --models models/composhed_models.pkl \
   --out-attributes synthetic_attributes.csv \
@@ -126,7 +124,7 @@ uv run compsched-generate \
 **MDCEV variant:**
 
 ```bash
-uv run compsched-generate-mdcev \
+uv run composhed-generate-mdcev \
   --attributes /path/to/attributes_binned.csv \
   --models models/mdcev_models.pkl \
   --out-attributes synthetic_mdcev_attributes.csv \
@@ -138,7 +136,7 @@ Output CSVs have columns `pid, act, start, end, duration` (schedules) and `pid, 
 ### Evaluate
 
 ```bash
-uv run compsched-evaluate \
+uv run composhed-evaluate \
   --target-schedules /path/to/activities.csv \
   --modelled-schedules synthetic_schedules.csv synthetic_mdcev_schedules.csv \
   --output-dir results/
@@ -161,7 +159,7 @@ uv run python run_stability.py \
 |------|---------|-------------|
 | `--seeds` | `0,1,2,3,4` | Comma-separated list of seeds to run |
 | `--out-dir` | `stability_runs` | Root output directory |
-| `--mdcev-max-records` | `5000` | Cap training records for MDCEV (reduces runtime) |
+| `--mdcev-max-records` | `5000` | Cap training records for MDCEV (reduces runtime). Values below ~15 000 can produce unreliable education-activity rates across seeds; increase for more stable results |
 | `--skip-mdcev` | off | Run compositional variant only |
 
 **Output layout:**
@@ -215,6 +213,6 @@ Trained and evaluated on NTS 2023. Lower is better.
 - Train and generation timing benchmarks
 - Evaluation notebook comparing against Caveat baselines (EMD, feasibility rate, creativity)
 - Calibration plots for each sub-model
-- Work-based subtour decomposition (currently collapsed into the work activity)
+- Work-based subtour decomposition (currently collapsed: shop in home→work→shop→work→home is treated as an inbound stop, not a separate subtour)
 - Location/mode choice modules (currently omitted by design to match ActVAE/Caveat scope)
 - Config file support as an alternative to CLI args

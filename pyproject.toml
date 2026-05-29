@@ -18,11 +18,11 @@ dependencies = [
 ]
 
 [project.scripts]
-compsched-train = "composhed.train:main"
-compsched-generate = "composhed.generate:main"
-compsched-train-mdcev = "composhed.train_mdcev:main"
-compsched-generate-mdcev = "composhed.generate_mdcev:main"
-compsched-evaluate = "composhed.evaluate:main"
+composhed-train = "composhed.train:main"
+composhed-generate = "composhed.generate:main"
+composhed-train-mdcev = "composhed.train_mdcev:main"
+composhed-generate-mdcev = "composhed.generate_mdcev:main"
+composhed-evaluate = "composhed.evaluate:main"
 
 [dependency-groups]
 dev = [

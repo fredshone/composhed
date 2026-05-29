@@ -51,7 +51,9 @@ class ActivityTypeModel:
                 continue
             Xs_const = sm.add_constant(Xs, has_constant="add")
             try:
-                self.models_[slot] = MNLogit(ys, Xs_const).fit(disp=False, maxiter=200)
+                self.models_[slot] = MNLogit(ys, Xs_const).fit(
+                    disp=False, maxiter=500, method="lbfgs"
+                )
             except Exception:
                 self.models_[slot] = None
 
@@ -86,3 +88,43 @@ class ActivityTypeModel:
             probs = np.pad(probs, (0, len(DISC_TYPES) - len(probs)))
             probs /= probs.sum()
         return DISC_TYPES[np.random.choice(len(DISC_TYPES), p=probs)]
+
+    def validate(self, slot_records: list[dict], feature_names: list[str]) -> dict:
+        """In-sample accuracy per slot and overall."""
+        X_base, _ = encode_features(slot_records, LABEL_COLS, feature_names=feature_names)
+        extra = np.column_stack(
+            [
+                [float(r["dap_WD"]) for r in slot_records],
+                [float(r["slot_numeric"]) for r in slot_records],
+                [float(r["remaining_budget"]) / 1440.0 for r in slot_records],
+            ]
+        )
+        X_all = np.hstack([X_base, extra])
+        y_all = np.array([DISC_TYPES.index(r["atype"]) for r in slot_records], dtype=int)
+        slot_keys = [r["slot_key"] for r in slot_records]
+
+        result: dict = {}
+        all_pred = np.full(len(y_all), -1, dtype=int)
+
+        for slot in self.SLOTS:
+            model = self.models_.get(slot)
+            mask = np.array([k == slot for k in slot_keys])
+            if not mask.any() or model is None:
+                continue
+            Xs_const = sm.add_constant(X_all[mask], has_constant="add")
+            probs = model.predict(Xs_const)
+            probs = np.where(np.isfinite(probs), probs, 0.0)
+            probs = np.clip(probs, 0.0, None)
+            s = probs.sum(axis=1, keepdims=True)
+            probs = np.where(s > 0, probs / s, 1.0 / probs.shape[1])
+            pred = probs.argmax(axis=1)
+            all_pred[np.where(mask)[0]] = pred
+            result[slot] = {"n": int(mask.sum()), "accuracy": float((pred == y_all[mask]).mean())}
+
+        valid = all_pred >= 0
+        if valid.any():
+            result["overall"] = {
+                "n": int(valid.sum()),
+                "accuracy": float((all_pred[valid] == y_all[valid]).mean()),
+            }
+        return result

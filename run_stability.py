@@ -18,28 +18,53 @@ def _run_cmd(cmd: list[str], log_path: Path, append: bool = False) -> tuple[int,
 
 
 @click.command()
-@click.option("--attributes", required=True, type=click.Path(exists=True), help="Path to attributes CSV")
-@click.option("--schedules", required=True, type=click.Path(exists=True), help="Path to schedules CSV")
-@click.option("--seeds", default="0,1,2,3,4", show_default=True, help="Comma-separated seed list")
-@click.option("--out-dir", default="stability_runs", show_default=True, help="Output root directory")
-@click.option("--mdcev-max-records", default=5000, show_default=True, type=int)
-@click.option("--skip-mdcev", is_flag=True, default=False, help="Run compositional variant only")
+@click.option(
+    "--attributes",
+    required=True,
+    type=click.Path(exists=True),
+    help="Path to attributes CSV",
+)
+@click.option(
+    "--schedules",
+    required=True,
+    type=click.Path(exists=True),
+    help="Path to schedules CSV",
+)
+@click.option(
+    "--seeds", default="0,1,2,3,4", show_default=True, help="Comma-separated seed list"
+)
+@click.option(
+    "--out-dir",
+    default="stability_runs",
+    show_default=True,
+    help="Output root directory",
+)
+@click.option("--mdcev-max-records", default=None, show_default=True, type=int)
+@click.option(
+    "--skip-compositional", is_flag=True, default=False, help="Run MDCEV variant only"
+)
+@click.option(
+    "--skip-mdcev", is_flag=True, default=False, help="Run compositional variant only"
+)
 def main(
     attributes: str,
     schedules: str,
     seeds: str,
     out_dir: str,
     mdcev_max_records: int,
+    skip_compositional: bool,
     skip_mdcev: bool,
 ) -> None:
     seed_list = [int(s.strip()) for s in seeds.split(",")]
     base = Path(out_dir)
-    variants = ["compositional"] + ([] if skip_mdcev else ["mdcev"])
+    variants = ([] if skip_compositional else ["compositional"]) + (
+        [] if skip_mdcev else ["mdcev"]
+    )
     summary: list[tuple[int, str, str, float]] = []
 
-    for seed in seed_list:
-        for variant in variants:
-            run_dir = base / f"seed_{seed}" / variant
+    for variant in variants:
+        for seed in seed_list:
+            run_dir = base / variant / f"seed_{seed}"
             models_dir = run_dir / "models"
             models_dir.mkdir(parents=True, exist_ok=True)
             log = run_dir / "run.log"
@@ -48,21 +73,35 @@ def main(
 
             if variant == "compositional":
                 train_cmd = [
-                    sys.executable, "-m", "composhed.train",
-                    "--attributes", attributes,
-                    "--schedules", schedules,
-                    "--output-dir", str(models_dir),
-                    "--seed", str(seed),
+                    sys.executable,
+                    "-m",
+                    "composhed.train",
+                    "--attributes",
+                    attributes,
+                    "--schedules",
+                    schedules,
+                    "--output-dir",
+                    str(models_dir),
+                    "--seed",
+                    str(seed),
                 ]
                 model_pkl = models_dir / "composhed_models.pkl"
             else:
                 train_cmd = [
-                    sys.executable, "-m", "composhed.train_mdcev",
-                    "--attributes", attributes,
-                    "--schedules", schedules,
-                    "--output-dir", str(models_dir),
-                    "--seed", str(seed),
-                    "--max-records", str(mdcev_max_records),
+                    sys.executable,
+                    "-m",
+                    "composhed.train_mdcev",
+                    "--attributes",
+                    attributes,
+                    "--schedules",
+                    schedules,
+                    "--output-dir",
+                    str(models_dir),
+                    "--seed",
+                    str(seed),
+                    "--max-records",
+                    str(mdcev_max_records),
+                    "--free-gamma",
                 ]
                 model_pkl = models_dir / "mdcev_models.pkl"
 
@@ -78,27 +117,48 @@ def main(
 
             if variant == "compositional":
                 gen_cmd = [
-                    sys.executable, "-m", "composhed.generate",
-                    "--attributes", attributes,
-                    "--models", str(model_pkl),
-                    "--out-attributes", str(run_dir / "synthetic_attributes.csv"),
-                    "--out-schedules", str(run_dir / "synthetic_schedules.csv"),
-                    "--seed", str(seed),
+                    sys.executable,
+                    "-m",
+                    "composhed.generate",
+                    "--attributes",
+                    attributes,
+                    "--models",
+                    str(model_pkl),
+                    "--out-attributes",
+                    str(run_dir / "synthetic_attributes.csv"),
+                    "--out-schedules",
+                    str(run_dir / "synthetic_schedules.csv"),
+                    "--seed",
+                    str(seed),
                 ]
             else:
                 gen_cmd = [
-                    sys.executable, "-m", "composhed.generate_mdcev",
-                    "--attributes", attributes,
-                    "--models", str(model_pkl),
-                    "--out-attributes", str(run_dir / "synthetic_mdcev_attributes.csv"),
-                    "--out-schedules", str(run_dir / "synthetic_mdcev_schedules.csv"),
-                    "--seed", str(seed),
+                    sys.executable,
+                    "-m",
+                    "composhed.generate_mdcev",
+                    "--attributes",
+                    attributes,
+                    "--models",
+                    str(model_pkl),
+                    "--out-attributes",
+                    str(run_dir / "synthetic_attributes.csv"),
+                    "--out-schedules",
+                    str(run_dir / "synthetic_schedules.csv"),
+                    "--seed",
+                    str(seed),
                 ]
 
             rc2, elapsed2 = _run_cmd(gen_cmd, log, append=True)
             gen_status = "OK" if rc2 == 0 else f"FAIL(rc={rc2})"
             click.echo(f" {gen_status} ({elapsed2:.0f}s)")
-            summary.append((seed, variant, f"train={train_status} gen={gen_status}", elapsed + elapsed2))
+            summary.append(
+                (
+                    seed,
+                    variant,
+                    f"train={train_status} gen={gen_status}",
+                    elapsed + elapsed2,
+                )
+            )
 
     click.echo("\n=== Stability run summary ===")
     for seed, variant, status, elapsed in summary:

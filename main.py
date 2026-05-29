@@ -18,12 +18,15 @@ def main():
         generate_main()
     elif cmd == "train-mdcev":
         from composhed.train_mdcev import main as train_mdcev_main
+
         train_mdcev_main()
     elif cmd == "generate-mdcev":
         from composhed.generate_mdcev import main as generate_mdcev_main
+
         generate_mdcev_main()
     elif cmd == "evaluate":
         from composhed.evaluate import main as evaluate_main
+
         evaluate_main()
     else:
         print(f"Unknown command: {cmd}")

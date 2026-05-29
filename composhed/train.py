@@ -27,6 +27,61 @@ from composhed.models.mandatory import MandatoryDurationModel
 from composhed.models.ntours import NToursModel
 
 
+def _print_validation(step: str, metrics: dict) -> None:
+    """Pretty-print a validation metrics dict for one training step."""
+    n = metrics.get("n", "")
+    header = f"  {step}"
+    n_str = f"n={n:,}" if isinstance(n, int) else ""
+    print(f"{header:<42}{n_str}")
+
+    if "accuracy" in metrics and "prsquared" in metrics:
+        print(f"    accuracy {metrics['accuracy']:.3f}   pseudo-R² {metrics['prsquared']:.3f}")
+        per = metrics.get("per_class", {})
+        if per:
+            row = "    " + "   ".join(
+                f"{cls:<3} {v['n']:>5}  acc={v['acc']:.3f}"
+                for cls, v in per.items()
+            )
+            print(row)
+
+    if "log_r2" in metrics and "work" not in metrics:
+        print(f"    log-R² {metrics['log_r2']:.3f}   MAE {metrics['mae_minutes']:.0f} min")
+    for sub in ("work", "edu"):
+        if sub in metrics:
+            m = metrics[sub]
+            print(f"    {sub:<5}  n={m['n']:>5}  log-R² {m['log_r2']:.3f}  MAE {m['mae_minutes']:.0f} min")
+
+    if "mae" in metrics and "log_r2" not in metrics:
+        print(f"    accuracy {metrics['accuracy']:.3f}   MAE {metrics['mae']:.2f}")
+        per = metrics.get("per_count", {})
+        if per:
+            row = "    " + "   ".join(
+                f"{k}: n={v['n']:>4} acc={v['acc']:.3f}" for k, v in sorted(per.items())
+            )
+            print(row)
+
+    for slot in ("1", "2", "3+", "overall"):
+        if slot in metrics:
+            m = metrics[slot]
+            if "accuracy" in m:
+                label = f"slot {slot}" if slot != "overall" else "overall"
+                print(f"    {label:<8}  n={m['n']:>5}  accuracy {m['accuracy']:.3f}")
+
+    for atype in ("escort", "medical", "other", "shop", "visit"):
+        if atype in metrics:
+            m = metrics[atype]
+            print(f"    {atype:<8}  n={m['n']:>5}  log-R² {m['log_r2']:.3f}  MAE {m['mae_minutes']:.0f} min")
+
+    if "tour_placement" in metrics:
+        tp = metrics["tour_placement"]
+        print(f"    tour placement  n={tp['n']:>5}  accuracy {tp['accuracy']:.3f}")
+        for cls, v in tp.get("per_class", {}).items():
+            print(f"      {cls:<22}  n={v['n']:>5}  acc={v['acc']:.3f}")
+    if "tour_grouping" in metrics:
+        tg = metrics["tour_grouping"]
+        print(f"    tour grouping   n={tg['n']:>5}  accuracy {tg['accuracy']:.3f}")
+
+
 def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
     t0 = time.time()
     print("Loading data...")
@@ -61,6 +116,7 @@ def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
     print(f"\nStep 1: DAP model", flush=True)
     y_dap = [r["dap"] for r in records]
     dap_model = DAPModel().fit(X_base, y_dap)
+    _print_validation("Step 1 — DAP model", dap_model.validate(X_base, y_dap))
     pbar.update(1)
 
     # ---- Step 2: Mandatory duration --------------------------------------------
@@ -78,6 +134,10 @@ def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
         X_mand = np.hstack([X_mand, dap_WD_col, is_edu_col])
         y_mand = np.array([r["mandatory_duration"] for r in mand_records])
         mand_model = MandatoryDurationModel().fit(X_mand, y_mand)
+        _print_validation(
+            "Step 2 — Mandatory duration",
+            mand_model.validate(X_mand, y_mand, is_edu=is_edu_col.ravel()),
+        )
     else:
         mand_model = None
     pbar.update(1)
@@ -100,6 +160,10 @@ def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
         X_ntours = np.hstack([X_disc, dap_WD_col, rem_budget])
         y_ntours = np.array([r["n_disc"] for r in disc_records], dtype=int)
         ntours_model = NToursModel().fit(X_ntours, y_ntours)
+        _print_validation(
+            "Step 3 — N disc tours",
+            ntours_model.validate(X_ntours, y_ntours),
+        )
     else:
         ntours_model = None
     pbar.update(1)
@@ -108,18 +172,30 @@ def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
     pbar.set_description(f"Step 4: {steps[3]}")
     print(f"\nStep 4: Activity type", flush=True)
     atype_model = ActivityTypeModel().fit(disc_slot_records, feature_names)
+    _print_validation(
+        "Step 4 — Activity type",
+        atype_model.validate(disc_slot_records, feature_names),
+    )
     pbar.update(1)
 
     # ---- Step 5: Activity duration per type ------------------------------------
     pbar.set_description(f"Step 5: {steps[4]}")
     print(f"\nStep 5: Activity duration", flush=True)
     dur_model = ActivityDurationModel().fit(disc_slot_records, feature_names)
+    _print_validation(
+        "Step 5 — Activity duration",
+        dur_model.validate(disc_slot_records, feature_names),
+    )
     pbar.update(1)
 
     # ---- Step 6: Anchor timing -------------------------------------------------
     pbar.set_description(f"Step 6: {steps[5]}")
     print(f"\nStep 6: Anchor timing", flush=True)
     anchor_model = AnchorTimingModel().fit(records, feature_names, scaler)
+    _print_validation(
+        "Step 6 — Anchor timing",
+        anchor_model.validate(records, feature_names, scaler),
+    )
     pbar.update(1)
     pbar.close()
 

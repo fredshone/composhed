@@ -105,7 +105,7 @@ def _generate_one(
 
     # ---- H: nothing to do ---------------------------------------------------
     if dap == "H":
-        return assemble_schedule("H", 0, "home", [], None, None, [])
+        return assemble_schedule("H", 0, "home", [], None, None, [], None)
 
     # ---- Step 2: Mandatory duration -----------------------------------------
     mandatory_duration = 0.0
@@ -168,14 +168,19 @@ def _generate_one(
     if dap == "D":
         first_departure = anchor_model.sample_first_departure(employment)
 
-    # ---- Step 6b: Before-mandatory flags (WD and ED only) -------------------
-    before_work_flags: list[bool] = []
+    # ---- Step 6b: Tour placements (WD/ED) -----------------------------------
+    tour_placements: list[str] = []
     if dap in ("WD", "ED") and disc_activities and work_start is not None:
-        before_work_flags = anchor_model.sample_before_work_flags(
+        tour_placements = anchor_model.sample_tour_placements(
             x_label, disc_activities, work_start
         )
 
-    # ---- Step 6c: Assemble schedule -----------------------------------------
+    # ---- Step 6c: Tour groupings (D) ----------------------------------------
+    tour_groupings: list[bool] = []
+    if dap == "D" and len(disc_activities) >= 2:
+        tour_groupings = anchor_model.sample_tour_groupings(x_label, disc_activities)
+
+    # ---- Step 6d: Assemble schedule -----------------------------------------
     return assemble_schedule(
         dap=dap,
         mandatory_duration=mandatory_duration,
@@ -183,7 +188,8 @@ def _generate_one(
         disc_activities=disc_activities,
         work_start=work_start,
         first_departure=first_departure,
-        before_work_flags=before_work_flags,
+        tour_placements=tour_placements,
+        tour_groupings=tour_groupings,
     )
 
 
