@@ -379,15 +379,12 @@ def assemble_eased_mdcev_schedule(
     """
     from scipy.optimize import minimize as _sp_min
 
-    MIN_NON_HOME = 10.0
-
     # ---- (i) enumerate episodes ---------------------------------------------
-    # Non-home types: one episode per episode_counts entry, skip tiny allocations
     non_home_keys: list[str] = []
     for atype in sorted(alloc):
         if atype == "home":
             continue
-        if alloc[atype] < MIN_NON_HOME:
+        if alloc[atype] <= 0:
             continue
         n = max(1, int(episode_counts.get(atype, 1)))
         for idx in range(n):
