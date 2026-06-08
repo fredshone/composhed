@@ -19,9 +19,11 @@ Two variants are implemented:
 
 ## Models
 
-Both variants share the same **input variables** and **output format**.
+Both variants share the same **output format** but differ in which input variables they condition on.
 
-**Inputs (conditioning variables):** `age`, `sex`, `employment`, `hh_income`, `hh_zone`, `day`, `vehicles`, `access_egress_distance` — all one-hot encoded, with nulls filled as `"unknown"`.
+**Compositional inputs:** all 8 conditioning variables — `age`, `sex`, `employment`, `hh_income`, `hh_zone`, `day`, `vehicles`, `access_egress_distance` — one-hot encoded, nulls filled as `"unknown"`.
+
+**MDCEV inputs:** reduced to 5 variables — `age`, `sex`, `employment`, `hh_income`, `day` — `hh_zone`, `access_egress_distance`, and `vehicles` are excluded as spatial/mode-choice features not relevant to time allocation.
 
 **Outputs:** A 24-hour sequence of `(activity_type, duration_minutes)` pairs, where activity types are drawn from `{home, work, education, shop, visit, escort, medical, other}` and durations sum to 1440 minutes.
 
@@ -34,11 +36,11 @@ Follows the sequential tour-based paradigm of DaySim (Bowman & Ben-Akiva, 2001) 
 | Step | Model | Predicts |
 |------|-------|----------|
 | 1. DAP classification | Multinomial logit (`MNLogit`) | Day structure: home-only `H`, work-only `W`, work + discretionary `WD`, education-only `E`, education + discretionary `ED`, or discretionary-only `D` |
-| 2. Mandatory duration | Log-normal OLS | Work/education duration in minutes; active if DAP ∈ {W, WD, E, ED}; conditioned on person features plus two DAP flags: `dap_WD` (has discretionary) and `is_education` (education vs work) |
-| 3. Number of tours | Ordered logit (`OrderedModel`) | Count of discretionary activities (0–4); active if DAP ∈ {WD, ED, D} |
-| 4. Activity type per slot | Multinomial logit, separate models for slots 1, 2, 3+ | Discretionary activity type: shop, visit, escort, medical, or other |
-| 5. Activity duration per type | Log-normal OLS, separate model per activity type | Duration of each discretionary activity |
-| 6. Schedule assembly | KDE + 4-class MNL + binary logistic + rule-based algorithm | Work-start / first-departure timing (KDE per employment category); tour placement (4-class MNL: mandatory outbound stop, mandatory inbound stop, separate pre-work tour, separate post-work tour); D-schedule tour grouping (binary logistic: same tour vs. new tour per consecutive activity pair); inter-tour home episodes (`HOME_INTER = 10 min`) |
+| 2. Mandatory duration | Log-normal OLS | Work/education duration in minutes; active if DAP ∈ {W, WD, E, ED}; conditioned on all 8 person features plus `dap_WD` (has discretionary) and `is_edu` (education vs work) binary flags |
+| 3. Discretionary activity count | Ordered logit (`OrderedModel`) | Count of discretionary activity episodes (0–4); active if DAP ∈ {WD, ED, D}; conditioned on all 8 person features + `dap_WD` + normalised remaining time budget |
+| 4. Activity type per slot | Multinomial logit (`MNLogit`), separate models for slots 1, 2, 3+ | Discretionary activity type: escort, medical, other, shop, or visit; conditioned on all 8 person features + `dap_WD` + `slot_numeric` (capped at 3) + normalised remaining budget |
+| 5. Activity duration per type | Log-normal OLS, separate model per activity type | Duration of each discretionary activity; conditioned on all 8 person features + normalised remaining budget |
+| 6. Schedule assembly | KDE + 4-class logistic + binary logistic + rule-based algorithm | Work-start / first-departure timing (KDE per employment category); tour placement (4-class sklearn `LogisticRegression` on StandardScaler-scaled features: mandatory outbound/inbound stop or separate pre/post tour); D-schedule tour grouping (binary `LogisticRegression`: same tour vs. new tour per consecutive pair); inter-tour home episodes (`HOME_INTER = 10 min`) |
 
 Every step samples stochastically from predicted distributions (never argmax) to preserve distributional diversity across identical inputs.
 
@@ -50,11 +52,11 @@ The MDCEV output (durations summing exactly to 1440 minutes) is passed to a dedi
 
 | Assembly element | Behaviour |
 |---|---|
-| Non-home durations | Taken verbatim from MDCEV; proportionally rescaled only if total home time would fall below 60 min |
-| Home time | Computed as `1440 − sum(non-home)` (≥ 60 min enforced) and split around the anchor start |
-| Anchor timing | KDE per employment category, same as compositional (now covers work and education) |
-| Episode splitting | `EpisodeCountModel`: Poisson regression per type gives n episodes; total duration is divided among them |
-| Tour placement | 4-class MNL per episode (mandatory outbound/inbound stop or separate pre/post tour), same model as compositional |
+| DAP classification | Not performed — DAP is implicit in which types receive non-zero allocation |
+| Episode splitting | `EpisodeCountModel`: ordered logit per type on `log(total_duration)` gives n episodes; total is divided among them |
+| Episode start times | `StartTimeModel`: OLS per enumerated key (e.g. `shop_0`, `shop_1`) conditioned on person features and n_tours; stochastic noise added at generation |
+| Ordering | Episodes sorted by predicted start time; `home_0` fixed at start, final home fills remainder |
+| Duration optimisation | SLSQP minimises Σ(scheduled_start − predicted_start)² subject to per-type duration totals; no rule-based tour-placement constraints |
 
 The MDCEV approach captures correlations between activity participation and duration that the compositional pipeline treats as independent. The trade-off is less interpretable per-step coefficients and a dependency on Biogeme's MDCEV estimation.
 
