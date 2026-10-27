@@ -5,20 +5,29 @@ from pathlib import Path
 import pandas as pd
 from acteval import Evaluator
 
-_ATTR_COLS = ["pid", "gender", "age_group", "car_access", "work_status", "income"]
+from composhed.data import LABEL_COLS
 
 
 def _load_schedules(path: str) -> pd.DataFrame:
     df = pd.read_csv(path)
     if "hid" in df.columns:
         df = df.drop(columns=["hid"])
+    if "duration" not in df.columns:
+        df["duration"] = df["end"] - df["start"]
     return df[["pid", "act", "start", "end", "duration"]].sort_values(["pid", "start"]).reset_index(drop=True)
 
 
 def _load_attributes(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path)
-    df["car_access"] = df["car_access"].replace("unknown", "yes")
-    return df[_ATTR_COLS].reset_index(drop=True)
+    """Load attributes as strings with nulls filled as "unknown" (as data.load_attributes).
+
+    Uses LABEL_COLS when the file has them; otherwise keeps every non-index column
+    so that older attribute layouts still load.
+    """
+    df = pd.read_csv(path, low_memory=False)
+    df = df.drop(columns=[c for c in df.columns if c.startswith("Unnamed")])
+    cols = LABEL_COLS if all(c in df.columns for c in LABEL_COLS) else [c for c in df.columns if c != "pid"]
+    df[cols] = df[cols].astype("string").fillna("unknown").astype(str)
+    return df[["pid"] + cols].reset_index(drop=True)
 
 
 def _unique_names(paths: list[str]) -> list[str]:
@@ -33,6 +42,46 @@ def _unique_names(paths: list[str]) -> list[str]:
             seen[stem] += 1
             names.append(f"{stem}_{seen[stem] + 1}")
     return names
+
+
+def results_to_frame(result) -> pd.DataFrame:
+    """Flatten an acteval EvalResult into tidy rows (model, domain, metric, value).
+
+    Rows come from the combined feature distances (one per domain × feature), the
+    per-domain summary (metric "domain_mean") and the creativity descriptions
+    (novelty, diversity), which are the Table 9 quantities.
+    """
+    rows: list[dict] = []
+    dist = result.groups.combined.distances
+    models = [c for c in dist.columns if c != "unit"]
+    for (domain, feature), row in dist.iterrows():
+        for m in models:
+            rows.append({"model": m, "domain": domain, "metric": feature, "value": float(row[m])})
+    summary = result.summary()
+    for domain, row in summary.iterrows():
+        for m in models:
+            rows.append({"model": m, "domain": domain, "metric": "domain_mean", "value": float(row[m])})
+    desc = result.groups.combined.descriptions
+    for (domain, feature), row in desc.iterrows():
+        if domain != "creativity":
+            continue
+        for m in models:
+            rows.append({"model": m, "domain": domain, "metric": feature, "value": float(row[m])})
+        rows.append({"model": "observed", "domain": domain, "metric": feature, "value": float(row["observed"])})
+    return pd.DataFrame(rows, columns=["model", "domain", "metric", "value"])
+
+
+def evaluate_to_frame(
+    target_schedules: str,
+    modelled_schedules: list[str],
+    names: list[str] | None = None,
+) -> pd.DataFrame:
+    """Compare modelled schedules against a target and return tidy metric rows."""
+    target = _load_schedules(target_schedules)
+    names = names or _unique_names(modelled_schedules)
+    synthetic = {name: _load_schedules(path) for name, path in zip(names, modelled_schedules)}
+    result = Evaluator(target=target).compare(synthetic=synthetic)
+    return results_to_frame(result)
 
 
 def evaluate(

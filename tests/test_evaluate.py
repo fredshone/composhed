@@ -120,3 +120,33 @@ def test_evaluate_mismatched_attributes(tmp_path):
     with pytest.raises(SystemExit) as exc_info:
         main()
     assert exc_info.value.code == 1
+
+
+def test_evaluate_with_label_cols_attributes(tmp_path):
+    """Attribute files with the current LABEL_COLS layout (and nulls) load and split."""
+    from composhed.data import LABEL_COLS
+
+    _, target_sched = _write_dataset(tmp_path, "target")
+    _, model_sched = _write_dataset(tmp_path, "model")
+    rows = [dict(pid=i, age="21-32", hh_income="≤22316", sex="male" if i % 2 else "female",
+                 employment="" if i == 3 else "ft-employed", day="monday", hh_zone="urban",
+                 access_egress_distance="≤3.376", vehicles=1) for i in range(10)]
+    attr = str(tmp_path / "labels.csv")
+    _write_csv(attr, rows, ["pid"] + LABEL_COLS)
+    from composhed.evaluate import _load_attributes
+
+    df = _load_attributes(attr)
+    assert list(df.columns) == ["pid"] + LABEL_COLS and df.loc[3, "employment"] == "unknown"
+    evaluate(target_schedules=target_sched, modelled_schedules=[model_sched], target_attributes=attr,
+             modelled_attributes=[attr], split_on=["sex"])
+
+
+def test_evaluate_to_frame(tmp_path):
+    from composhed.evaluate import evaluate_to_frame
+
+    _, target_sched = _write_dataset(tmp_path, "target")
+    _, model_sched = _write_dataset(tmp_path, "model")
+    df = evaluate_to_frame(target_sched, [model_sched], names=["m"])
+    assert list(df.columns) == ["model", "domain", "metric", "value"]
+    assert {"participations", "transitions", "timing", "creativity", "feasibility"} <= set(df["domain"])
+    assert ((df["model"] == "m") & (df["metric"] == "domain_mean")).sum() == 5

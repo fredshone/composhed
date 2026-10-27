@@ -23,6 +23,12 @@ composhed-generate = "composhed.generate:main"
 composhed-train-mdcev = "composhed.train_mdcev:main"
 composhed-generate-mdcev = "composhed.generate_mdcev:main"
 composhed-evaluate = "composhed.evaluate:main"
+composhed-train-cemdap = "composhed.cemdap.train:main"
+composhed-generate-cemdap = "composhed.cemdap.generate:main"
+composhed-train-daysim = "composhed.daysim.train:main"
+composhed-generate-daysim = "composhed.daysim.generate:main"
+composhed-train-activitysim = "composhed.activitysim.train:main"
+composhed-generate-activitysim = "composhed.activitysim.generate:main"
 
 [dependency-groups]
 dev = [
