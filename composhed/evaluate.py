@@ -62,12 +62,14 @@ def results_to_frame(result) -> pd.DataFrame:
         for m in models:
             rows.append({"model": m, "domain": domain, "metric": "domain_mean", "value": float(row[m])})
     desc = result.groups.combined.descriptions
+    # acteval >= 0.3 names the reference column "target" (was "observed").
+    ref = "target" if "target" in desc.columns else "observed"
     for (domain, feature), row in desc.iterrows():
         if domain != "creativity":
             continue
         for m in models:
             rows.append({"model": m, "domain": domain, "metric": feature, "value": float(row[m])})
-        rows.append({"model": "observed", "domain": domain, "metric": feature, "value": float(row["observed"])})
+        rows.append({"model": "observed", "domain": domain, "metric": feature, "value": float(row[ref])})
     return pd.DataFrame(rows, columns=["model", "domain", "metric", "value"])
 
 
@@ -75,12 +77,32 @@ def evaluate_to_frame(
     target_schedules: str,
     modelled_schedules: list[str],
     names: list[str] | None = None,
+    target_attributes: str | None = None,
+    modelled_attributes: list[str] | None = None,
+    split_on: list[str] | None = None,
+    split_order: int | None = None,
 ) -> pd.DataFrame:
-    """Compare modelled schedules against a target and return tidy metric rows."""
+    """Compare modelled schedules against a target and return tidy metric rows.
+
+    With attributes, acteval scores every slice of ``split_on`` labels (default
+    LABEL_COLS) at ``split_order`` (acteval default 1) and the combined rows are
+    the slice-weighted averages. Without attributes the population is unsliced.
+    """
     target = _load_schedules(target_schedules)
     names = names or _unique_names(modelled_schedules)
     synthetic = {name: _load_schedules(path) for name, path in zip(names, modelled_schedules)}
-    result = Evaluator(target=target).compare(synthetic=synthetic)
+    attributes = None
+    target_attrs = None
+    if target_attributes is not None:
+        target_attrs = _load_attributes(target_attributes)
+        target_attrs = target_attrs[target_attrs["pid"].isin(target["pid"].unique())].reset_index(drop=True)
+        attributes = {name: _load_attributes(path) for name, path in zip(names, modelled_attributes)}
+        split_on = split_on or [c for c in target_attrs.columns if c != "pid"]
+    else:
+        split_on = None
+    evaluator = Evaluator(target=target, target_attributes=target_attrs, split_on=split_on,
+                          split_order=split_order)
+    result = evaluator.compare(synthetic=synthetic, attributes=attributes)
     return results_to_frame(result)
 
 
@@ -91,6 +113,7 @@ def evaluate(
     modelled_attributes: list[str] | None = None,
     split_on: list[str] | None = None,
     output_dir: str | None = None,
+    split_order: int | None = None,
 ) -> None:
     target_sched_pd = _load_schedules(target_schedules)
     target_attrs_pd = _load_attributes(target_attributes) if target_attributes else None
@@ -116,6 +139,7 @@ def evaluate(
         target=target_sched_pd,
         target_attributes=target_attrs_pd,
         split_on=effective_split_on,
+        split_order=split_order,
     )
     result = evaluator.compare(synthetic=synthetic, attributes=attributes)
 
@@ -143,6 +167,8 @@ def main() -> None:
                         help="Modelled attributes CSVs (must match --modelled-schedules count if given)")
     parser.add_argument("--split-on", nargs="*", default=None, metavar="COL",
                         help="Attribute columns to split results on")
+    parser.add_argument("--split-order", type=int, default=None,
+                        help="Number of split-on labels combined per slice (acteval default 1)")
     parser.add_argument("--output-dir", default=None, help="Directory to save result CSVs")
     args = parser.parse_args()
 
@@ -161,4 +187,5 @@ def main() -> None:
         modelled_attributes=args.modelled_attributes,
         split_on=args.split_on,
         output_dir=args.output_dir,
+        split_order=args.split_order,
     )

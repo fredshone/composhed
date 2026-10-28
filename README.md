@@ -194,6 +194,7 @@ uv run python scripts/summarise_runs.py --runs-dir stability_runs/ [--external a
 | `--ablations` | none | Extra runs as `<model>:<preset>`. Presets: `no-calibrate`, `independent-timing`, `rescale`, `res15`, `res30`, `res60`, `no-segmentation` |
 | `--target-schedules` | `--schedules` | Schedules to evaluate against |
 | `--evaluate / --no-evaluate` | on | Run acteval for each run |
+| `--split-order` | none | Score each slice of the eight labels at this acteval order (e.g. `2` for label pairs). Default: whole population only. |
 | `--skip-existing` | off | Skip runs that already have results |
 | `--mdcev-max-records` | all | MDCEV estimation sample size. Use 5000 on full NTS, which otherwise runs out of memory. |
 
@@ -213,35 +214,73 @@ The summary script writes `summary.csv` (one row per run) and
 
 ## Results
 
-NTS 2023, 5 seeds, one synthetic day per person (56,734). Values are acteval
-distances, so lower is better, shown as mean ± standard deviation across
+NTS 2023, 5 seeds, one synthetic day per person (56,734), evaluated with
+**acteval 0.3.0**. Values are acteval distances, so lower is better, shown as mean ± standard deviation across
 seeds. Feasibility is 0 for every model.
+
+### Whole population
+
+Each synthetic population is compared with the observed one as a whole (no
+label slicing).
 
 | Model | Participations | Transitions | Timing | Creativity |
 |---|---|---|---|---|
-| Compositional | 0.045 ± 0.001 | 0.0031 ± 0.0001 | 0.053 ± 0.000 | 0.062 ± 0.001 |
-| MDCEV¹ | 0.265 ± 0.007 | 0.0098 ± 0.0002 | 0.081 ± 0.001 | 0.099 ± 0.005 |
-| CEMDAP | 0.041 ± 0.002 | 0.0027 ± 0.0001 | 0.023 ± 0.000 | **0.015 ± 0.000** |
-| DaySim | 0.046 ± 0.003 | 0.0015 ± 0.0001 | **0.018 ± 0.000** | 0.207 ± 0.001 |
-| ActivitySim | **0.031 ± 0.003** | **0.0014 ± 0.0000** | 0.019 ± 0.001 | 0.209 ± 0.001 |
+| Compositional | 0.052 ± 0.001 | 0.0031 ± 0.0001 | 0.054 ± 0.000 | 0.062 ± 0.001 |
+| MDCEV¹ | 0.286 ± 0.007 | 0.0089 ± 0.0002 | 0.082 ± 0.001 | 0.099 ± 0.005 |
+| CEMDAP | 0.047 ± 0.002 | 0.0027 ± 0.0001 | 0.025 ± 0.000 | **0.015 ± 0.000** |
+| DaySim | 0.052 ± 0.003 | 0.0017 ± 0.0000 | **0.019 ± 0.000** | 0.207 ± 0.001 |
+| ActivitySim | **0.035 ± 0.003** | **0.0016 ± 0.0000** | 0.019 ± 0.000 | 0.209 ± 0.001 |
 
 | Ablation | Participations | Transitions | Timing | Creativity |
 |---|---|---|---|---|
-| CEMDAP, no calibration | 0.043 ± 0.001 | 0.0027 ± 0.0001 | 0.022 ± 0.000 | 0.014 ± 0.000 |
-| DaySim, 15-min periods | 0.044 ± 0.007 | 0.0015 ± 0.0000 | 0.019 ± 0.000 | 0.201 ± 0.002 |
-| ActivitySim, no segmentation | 0.032 ± 0.008 | 0.0014 ± 0.0000 | 0.019 ± 0.001 | 0.209 ± 0.002 |
+| CEMDAP, no calibration | 0.049 ± 0.001 | 0.0027 ± 0.0001 | 0.024 ± 0.000 | 0.014 ± 0.000 |
+| DaySim, 15-min periods | 0.050 ± 0.007 | 0.0017 ± 0.0000 | 0.020 ± 0.000 | 0.201 ± 0.002 |
+| ActivitySim, no segmentation | 0.036 ± 0.009 | 0.0016 ± 0.0000 | 0.020 ± 0.001 | 0.209 ± 0.002 |
 
 ¹ MDCEV was estimated on 5,000 people with `--free-gamma` (the harness setting); its episode and timing models use everyone.
 
-**How to read these results:**
+### Within label pairs (2nd-order slicing)
+
+acteval scores every combination of two labels separately (for example
+`age = 21-32 & employment = student`), then averages the slices. There are 934
+slices; the 99 with fewer than 30 observed people are skipped. This asks
+whether each model reproduces schedules *for each kind of person*, not just
+overall. Run it with `run_stability.py --split-order 2`. Each evaluation takes
+about 8 minutes, against about 10 s unsliced.
+
+| Model | Participations | Transitions | Timing | Creativity |
+|---|---|---|---|---|
+| Compositional | 0.061 ± 0.001 | 0.0051 ± 0.0000 | 0.059 ± 0.000 | 0.017 ± 0.000 |
+| MDCEV¹ | 0.304 ± 0.010 | 0.0121 ± 0.0002 | 0.089 ± 0.002 | 0.095 ± 0.004 |
+| CEMDAP | 0.057 ± 0.001 | 0.0048 ± 0.0000 | 0.031 ± 0.000 | **0.002 ± 0.000** |
+| DaySim | 0.064 ± 0.002 | 0.0038 ± 0.0000 | 0.027 ± 0.000 | 0.078 ± 0.001 |
+| ActivitySim | **0.051 ± 0.002** | **0.0036 ± 0.0000** | **0.027 ± 0.000** | 0.079 ± 0.001 |
+
+| Ablation | Participations | Transitions | Timing | Creativity |
+|---|---|---|---|---|
+| CEMDAP, no calibration | 0.058 ± 0.001 | 0.0048 ± 0.0000 | 0.030 ± 0.000 | 0.002 ± 0.000 |
+| DaySim, 15-min periods | 0.062 ± 0.005 | 0.0038 ± 0.0000 | 0.028 ± 0.000 | 0.076 ± 0.001 |
+| ActivitySim, no segmentation | 0.058 ± 0.005 | 0.0038 ± 0.0000 | 0.028 ± 0.000 | 0.079 ± 0.001 |
+
+Compared with the whole-population scores, participations, transitions and
+timing rise by 10–60% for every model, but the ranking hardly changes.
+Creativity is now measured within each slice, so it is not comparable with the
+whole-population numbers. ActivitySim's per-person-type coefficients now make a
+visible difference (0.051 vs 0.058 on participations); without slicing they
+did not.
+
+### Notes on both tables
 
 * **They measure fit, not generalisation.** Generation uses the training
   attributes and is compared with the training schedules.
 * **No repairs were needed.** No source-aligned run needed a person-level
   fallback or a rescale.
-* **DaySim and ActivitySim score poorly on creativity.** They copy observed
-  days more often: about 13% of their days exactly match a training day,
-  against about 1% for the other models.
+* **DaySim and ActivitySim score poorly on creativity in both tables.** They
+  copy observed days more often: about 13% of their days exactly match a
+  training day, against about 1% for the other models.
+* **Result files:** `stability_runs/summary_table.csv` holds the label-pair
+  results, and `stability_runs/_acteval_0.3.0_unsliced/` the whole-population
+  ones.
 
 ---
 

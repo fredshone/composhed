@@ -74,10 +74,17 @@ def _generate_cmd(variant: str, attributes: str, model_pkl: Path, run_dir: Path,
             "--out-schedules", str(run_dir / "synthetic_schedules.csv"), "--seed", str(seed)]
 
 
-def _evaluate(run_dir: Path, target: str, variant: str, ablation: str, seed: int) -> None:
+def _evaluate(run_dir: Path, target: str, variant: str, ablation: str, seed: int,
+              target_attributes: str | None = None, split_order: int | None = None) -> None:
     from composhed.evaluate import evaluate_to_frame
 
-    df = evaluate_to_frame(target, [str(run_dir / "synthetic_schedules.csv")], names=[variant])
+    sliced = split_order is not None
+    df = evaluate_to_frame(
+        target, [str(run_dir / "synthetic_schedules.csv")], names=[variant],
+        target_attributes=target_attributes if sliced else None,
+        modelled_attributes=[str(run_dir / "synthetic_attributes.csv")] if sliced else None,
+        split_order=split_order,
+    )
     df.insert(0, "seed", seed)
     df.insert(0, "ablation", ablation or "none")
     df.insert(0, "variant", variant)
@@ -120,10 +127,12 @@ def _parse_runs(variants: str, ablations: str, skip_compositional: bool, skip_md
 @click.option("--skip-compositional", is_flag=True, default=False, help="Alias: drop compositional from --variants")
 @click.option("--skip-mdcev", is_flag=True, default=False, help="Alias: drop mdcev from --variants")
 @click.option("--evaluate/--no-evaluate", default=True, show_default=True, help="Run acteval per run")
+@click.option("--split-order", default=None, type=int,
+              help="Evaluate per label slice (all LABEL_COLS) at this acteval split order; default unsliced")
 @click.option("--skip-existing", is_flag=True, default=False,
               help="Skip runs whose metrics.csv already exists")
 def main(attributes, schedules, target_schedules, seeds, out_dir, variants, ablations, mdcev_max_records,
-         skip_compositional, skip_mdcev, evaluate, skip_existing) -> None:
+         skip_compositional, skip_mdcev, evaluate, split_order, skip_existing) -> None:
     seed_list = [int(s.strip()) for s in seeds.split(",")]
     runs = _parse_runs(variants, ablations, skip_compositional, skip_mdcev)
     target = target_schedules or schedules
@@ -164,7 +173,7 @@ def main(attributes, schedules, target_schedules, seeds, out_dir, variants, abla
                 click.echo(f"[seed={seed}, {name}] evaluating...", nl=False)
                 t0 = time.time()
                 try:
-                    _evaluate(run_dir, target, variant, ablation, seed)
+                    _evaluate(run_dir, target, variant, ablation, seed, attributes, split_order)
                     ev = "OK"
                 except Exception as exc:  # noqa: BLE001 — keep going with other runs
                     ev = f"FAIL({exc})"

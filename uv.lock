@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -9,7 +9,7 @@ resolution-markers = [
 
 [[package]]
 name = "acteval"
-version = "0.1.1"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "matplotlib" },
@@ -17,12 +17,14 @@ dependencies = [
     { name = "pandas" },
     { name = "pot" },
     { name = "scipy" },
+    { name = "seaborn" },
     { name = "tabulate" },
+    { name = "tqdm" },
     { name = "tslearn" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/37/36/86e53ea4927405d013bf6dc44366368832901b4505887a12a1e96ef8919c/acteval-0.1.1.tar.gz", hash = "sha256:c99b0a69f39b71770f835f6584b26b59e064e6ed45f46775b433816caef7c4fc", size = 305934, upload-time = "2026-04-27T06:08:04.716Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/13/5f/e570e11765dd0037711420074aea630a533fc27d890dba787ce6604ce24a/acteval-0.3.0.tar.gz", hash = "sha256:5557557cfbf77da5aec6a6f96928e0cb9e7049c264685d4bc098c56d9528750f", size = 289504, upload-time = "2026-10-27T16:33:40.208Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f4/dd/276017dee3671ea2f9ce5234d5f826229dc098535b477c0ee2a44a9f1d5f/acteval-0.1.1-py3-none-any.whl", hash = "sha256:f388d3a28e33e2467c083d4b91d1a6a4777bfb36dec67e187f064edfdd110a4f", size = 61847, upload-time = "2026-04-27T06:08:03.501Z" },
+    { url = "https://files.pythonhosted.org/packages/9f/37/eeaf2643ff422e78145d28e01797bc93f118db3a2ba380fc3537195a122c/acteval-0.3.0-py3-none-any.whl", hash = "sha256:46a0fe390b29ea65f5054ce6271c87ada4a3d93f5afc86b3ff0ded15022ee157", size = 82179, upload-time = "2026-10-27T16:33:38.746Z" },
 ]
 
 [[package]]
@@ -435,7 +437,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "acteval", specifier = ">=0.1.1" },
+    { name = "acteval", specifier = ">=0.3.0" },
     { name = "biogeme" },
     { name = "click", specifier = ">=8.3.3" },
     { name = "joblib" },
@@ -568,34 +570,34 @@ wheels = [
 
 [package.optional-dependencies]
 cudart = [
-    { name = "nvidia-cuda-runtime", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cuda-runtime" },
 ]
 cufft = [
-    { name = "nvidia-cufft", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cufft" },
 ]
 cufile = [
-    { name = "nvidia-cufile", marker = "sys_platform == 'linux'" },
+    { name = "nvidia-cufile" },
 ]
 cupti = [
-    { name = "nvidia-cuda-cupti", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cuda-cupti" },
 ]
 curand = [
-    { name = "nvidia-curand", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-curand" },
 ]
 cusolver = [
-    { name = "nvidia-cusolver", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cusolver" },
 ]
 cusparse = [
-    { name = "nvidia-cusparse", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cusparse" },
 ]
 nvjitlink = [
-    { name = "nvidia-nvjitlink", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-nvjitlink" },
 ]
 nvrtc = [
-    { name = "nvidia-cuda-nvrtc", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cuda-nvrtc" },
 ]
 nvtx = [
-    { name = "nvidia-nvtx", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-nvtx" },
 ]
 
 [[package]]
@@ -2931,6 +2933,20 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/52/52/e57eceff0e342a1f50e274264ed47497b59e6a4e3118808ee58ddda7b74a/scipy-1.17.1-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:a77cbd07b940d326d39a1d1b37817e2ee4d79cb30e7338f3d0cddffae70fcaa2", size = 37682317, upload-time = "2026-02-23T00:22:18.513Z" },
     { url = "https://files.pythonhosted.org/packages/11/2f/b29eafe4a3fbc3d6de9662b36e028d5f039e72d345e05c250e121a230dd4/scipy-1.17.1-cp314-cp314t-win_amd64.whl", hash = "sha256:eb092099205ef62cd1782b006658db09e2fed75bffcae7cc0d44052d8aa0f484", size = 37345327, upload-time = "2026-02-23T00:22:24.442Z" },
     { url = "https://files.pythonhosted.org/packages/07/39/338d9219c4e87f3e708f18857ecd24d22a0c3094752393319553096b98af/scipy-1.17.1-cp314-cp314t-win_arm64.whl", hash = "sha256:200e1050faffacc162be6a486a984a0497866ec54149a01270adc8a59b7c7d21", size = 25489165, upload-time = "2026-02-23T00:22:29.563Z" },
+]
+
+[[package]]
+name = "seaborn"
+version = "0.13.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "matplotlib" },
+    { name = "numpy" },
+    { name = "pandas" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/86/59/a451d7420a77ab0b98f7affa3a1d78a313d2f7281a57afb1a34bae8ab412/seaborn-0.13.2.tar.gz", hash = "sha256:93e60a40988f4d65e9f4885df477e2fdaff6b73a9ded434c1ab356dd57eefff7", size = 1457696, upload-time = "2024-01-25T13:21:52.551Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/83/11/00d3c3dfc25ad54e731d91449895a79e4bf2384dc3ac01809010ba88f6d5/seaborn-0.13.2-py3-none-any.whl", hash = "sha256:636f8336facf092165e27924f223d3c62ca560b1f2bb5dff7ab7fad265361987", size = 294914, upload-time = "2024-01-25T13:21:49.598Z" },
 ]
 
 [[package]]
