@@ -4,11 +4,13 @@ from collections import defaultdict
 
 import numpy as np
 
+from composhed.data import DISC_TYPES
+
 
 class EpisodeCountModel:
     """Per-type Poisson regression: n_episodes ~ Poisson(exp(α + β·log(duration)))."""
 
-    DISC_TYPES = ["escort", "medical", "other", "shop", "visit"]
+    DISC_TYPES = list(DISC_TYPES)
 
     def fit(self, records: list[dict]) -> "EpisodeCountModel":
         type_obs: dict[str, list[tuple[float, int]]] = defaultdict(list)

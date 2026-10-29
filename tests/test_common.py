@@ -4,13 +4,13 @@ import numpy as np
 import pytest
 
 from composhed.common.calibration import Target, calibrate, offset_accessors, share_dict
-from composhed.common.choice import MNL, ConditionalLogit, OrderedLogit
+from composhed.common.choice import MNL, AltAttrMNL, ConditionalLogit, OrderedLogit
 from composhed.common.hazard import AFTModel
 from composhed.common.lognormal import LogNormalDuration
-from composhed.common.periods import IntraPeriodSampler, PeriodGrid
+from composhed.common.periods import PeriodGrid
 from composhed.common.schedule import InvalidSchedule, check_rows, finalise, from_episodes
 from composhed.common.timewindow import TimeWindow
-from composhed.common.tod import TourTOD, layout_rescale
+from composhed.common.tod import TourTOD, layout_rescale, tw_state
 from composhed.common.tours import ExtractionCounters, extract_day_structure
 from composhed.data import extract_tour_memberships
 
@@ -108,14 +108,10 @@ def test_early_departure():
 
 
 # ---- periods ---------------------------------------------------------------------------
-def test_period_grid_and_intra_sampler():
+def test_period_grid():
     g = PeriodGrid.with_early_bin(60)
     assert g.n == 20 and g.period_of(0) == 0 and g.period_of(299) == 0 and g.period_of(300) == 1
     assert g.end_period_of(360) == 1 and g.end_period_of(361) == 2
-    s = IntraPeriodSampler(PeriodGrid.uniform(30), min_count=5).fit({"k": [485] * 50})
-    rng = np.random.default_rng(0)
-    assert s.sample("k", 16, 480, 510, rng) == 485
-    assert 490 <= s.sample("k", 16, 490, 510, rng) < 510  # infeasible mode → restricted range
 
 
 # ---- choice models -------------------------------------------------------------------------
@@ -166,6 +162,53 @@ def test_conditional_logit_recovers_shape_terms():
     assert (m.sample(Z[:3], rng, avail) == 4).all()
     assert (m.sample(Z[:1], rng, np.zeros((1, J), bool)) == -1).all()
 
+
+
+def test_conditional_logit_recovers_chooser_specific_attributes():
+    """The dyn path (ActivitySim timetable terms): δ recovered with chunked attributes."""
+    rng = np.random.default_rng(3)
+    J, N = 8, 12000
+    F = np.eye(J)[:, 1:]
+    G = np.zeros((J, 1))
+    A = rng.normal(size=(N, J, 2))
+    delta = np.array([1.5, -0.8])
+    V = A @ delta
+    P = np.exp(V) / np.exp(V).sum(1, keepdims=True)
+    y = (rng.random(N)[:, None] > P.cumsum(1)).sum(1)
+    m = ConditionalLogit(F, G, l2=1e-6, maxiter=500, chunk=1000, n_dyn=2).fit(np.ones((N, 1)), y, dyn=lambda s, e: A[s:e])
+    assert np.allclose(m.delta_, delta, atol=0.1)
+    assert np.allclose(m.predict_proba(np.ones((5, 1)), dyn=lambda s, e: A[s:e]), P[:5], atol=0.02)
+
+
+def test_alt_attr_mnl_recovers_interaction():
+    rng = np.random.default_rng(4)
+    attrs = {f"a{k}": [float(k), float(k >= 2)] for k in range(4)}
+    N = 15000
+    x = rng.normal(size=(N, 1))
+    a = np.array(list(attrs.values()))
+    V = 0.5 * a[:, 0][None, :] + (x * 1.2) @ a[:, :1].T
+    P = np.exp(V) / np.exp(V).sum(1, keepdims=True)
+    y = [f"a{k}" for k in (rng.random(N)[:, None] > P.cumsum(1)).sum(1)]
+    m = AltAttrMNL(attrs, ["count", "2plus"], l2=1e-6).fit(x, y, list(attrs))
+    assert abs(m.coef_table()["x0"]["count"] - 1.2) < 0.1
+    m.offset[0] += 5.0  # calibration offsets are alternative-specific
+    assert m.predict_proba(x[:1])[0, 0] > P[0, 0]
+
+
+def test_tod_timetable_terms():
+    from composhed.activitysim.tod_spec import SPECS
+
+    tod = TourTOD(PeriodGrid.with_early_bin(60), SPECS["nonmandatory"], dynamic="asim")
+    tw = TimeWindow()
+    tw.reserve(480, 1000)  # 08:00–16:40
+    A = tod.dyn_fn([tw_state(tw, 1)])(0, 1)[0]
+    alt = lambda s, e: tod.alt_index[(int(tod.grid.period_of(s)), int(tod.grid.end_period_of(e)))]
+    j_after, j_later, j_before = alt(1010, 1200), alt(1100, 1200), alt(300, 500)
+    assert A[j_after, 0] == 1 and A[j_after, 1] == 0  # departs in the period the earlier tour ended
+    assert A[j_before, 1] == 1 and A[j_before, 0] == 0  # arrives in the period the later tour starts
+    assert A[j_later, 0] == 0 and A[j_later, 3] > 0 and A[j_later, 4] == 0  # gap to the tour before only
+    assert A[j_after, 2] > 0  # one tour still to schedule
+    assert (tod.dyn_fn([tw_state(TimeWindow(), 0)])(0, 1)[0] == 0).all()
 
 # ---- duration models ------------------------------------------------------------------------
 @pytest.mark.parametrize("distr", ["loglogistic", "weibull"])
@@ -228,13 +271,16 @@ def test_finalise_counts_merges_and_rounds():
 
 def test_tod_realise_respects_window_and_rescale_layout():
     grid = PeriodGrid.uniform(30)
-    tod = TourTOD(grid, buffer=10)
-    tod.key = "k"
+    from composhed.daysim.tod_spec import SPECS
+
+    tod = TourTOD(grid, SPECS["nonmandatory"], buffer=10)
     tw = TimeWindow()
     tw.reserve(500, 700)
     rng = np.random.default_rng(6)
     j = tod.alt_index[(15, 16)]  # 07:30–08:30, overlaps nothing if it ends before 08:10
-    s, e = tod.realise(j, tw, rng)
-    assert 450 <= s < e <= 490 and tw.is_free(s, e)
+    draws = [tod.realise(j, tw, rng) for _ in range(300)]
+    assert all(450 <= s < e <= 490 and tw.is_free(s, e) for s, e in draws)
+    starts = np.array([s for s, _ in draws])
+    assert starts.min() < 455 and starts.max() > 475  # uniform over the period, not concentrated
     out, changed = layout_rescale([(100, 900), (500, 1400)], 10)
     assert changed and out[0][1] + 10 <= out[1][0] + 1e-9 and out[-1][1] <= 1439

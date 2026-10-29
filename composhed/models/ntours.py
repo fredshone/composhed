@@ -18,6 +18,15 @@ class NToursModel:
         # OrderedModel rejects constant/near-constant columns — drop them
         col_var = X.var(axis=0)
         self.keep_cols_ = col_var > 1e-10
+        # ...and columns collinear with an implicit constant (e.g. the dummies of
+        # a label whose reference level is absent from this subset sum to 1)
+        kept = np.ones((len(X), 1))
+        for j in np.flatnonzero(self.keep_cols_):
+            cand = np.column_stack([kept, X[:, j]])
+            if np.linalg.matrix_rank(cand) == cand.shape[1]:
+                kept = cand
+            else:
+                self.keep_cols_[j] = False
         X_clean = X[:, self.keep_cols_]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")

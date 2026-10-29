@@ -1,41 +1,38 @@
 """ASIM-1: ActivitySim person types from NTS ``age`` × ``employment``.
 
-Rules, applied in order (first match wins):
+As in ActivitySim's ``annotate_persons``, children are typed by age and adults
+by employment / student status. Rules, applied in order (first match wins):
 
 | # | Condition | Person type |
 |---|---|---|
-| 1 | age ≤10 | CHILD (pre-school and non-driving child cannot be separated: one ≤10 bin) |
-| 2 | employment = ft-employed | FTW (full-time worker) |
-| 3 | employment = pt-employed | PTW (part-time worker) |
-| 4 | employment = retired | RETIRED |
-| 5 | employment = student, age ≥21 | UNIV (university student) |
-| 6 | employment ∈ {student, unknown}, age 10-21 | DRIVING_STUDENT (school-age; the 10-21 bin mixes driving and non-driving ages) |
-| 7 | employment ∈ {unemployed, other, unknown}, age ≥21 | NONWORK (non-working adult) |
-| 8 | anything else (e.g. unemployed / other aged 10-21) | NONWORK, counted as *unmapped* |
+| 1 | age 0-11, employment = void (not in school) | PRESCHOOL |
+| 2 | age 0-11 | SCHOOL (non-driving-age student; the 0-11 bin also holds 5-year-olds) |
+| 3 | age 11-18 | DRIVING (the 11-18 bin mixes non-driving 11-15 and driving 16-17 year-olds) |
+| 4 | employment = employed | FTW (worker: NTS ``employment`` no longer separates full / part time, so PTW is merged in) |
+| 5 | employment = retired | RETIRED (self-reported; the 62-71 bin straddles ActivitySim's 65+ rule) |
+| 6 | employment = student | UNIV (university student) |
+| 7 | employment ∈ {unemployed, void, unknown} | NONWORK (non-working adult) |
+| 8 | anything else | NONWORK, counted as *unmapped* |
 """
 
 from collections import Counter
 
-PERSON_TYPES = ["FTW", "PTW", "UNIV", "NONWORK", "RETIRED", "DRIVING_STUDENT", "CHILD"]
-_ADULT_AGES = {"21-32", "32-40", "40-48", "48-54", "54-61", "61-68", "68-75", ">75"}
+PERSON_TYPES = ["FTW", "UNIV", "NONWORK", "RETIRED", "DRIVING", "SCHOOL", "PRESCHOOL"]
 
 
 def person_type(age: str, employment: str, unmapped: Counter | None = None) -> str:
     age, employment = str(age), str(employment)
-    if age == "≤10":
-        return "CHILD"
-    if employment == "ft-employed":
+    if age == "0-11":
+        return "PRESCHOOL" if employment == "void" else "SCHOOL"
+    if age == "11-18":
+        return "DRIVING"
+    if employment == "employed":
         return "FTW"
-    if employment == "pt-employed":
-        return "PTW"
     if employment == "retired":
         return "RETIRED"
-    adult = age in _ADULT_AGES
-    if employment == "student" and adult:
+    if employment == "student":
         return "UNIV"
-    if employment in ("student", "unknown") and age == "10-21":
-        return "DRIVING_STUDENT"
-    if employment in ("unemployed", "other", "unknown") and adult:
+    if employment in ("unemployed", "void", "unknown"):
         return "NONWORK"
     if unmapped is not None:
         unmapped[(age, employment)] += 1

@@ -11,6 +11,10 @@ A tour whose choice set is empty is dropped and counted (DAY-9, ASIM-11); a pair
 that cannot be realised in minutes is redrawn up to ``max_resample`` times first.
 With ``consistency="rescale"`` (AB-3) no availability is used: every tour is
 sampled freely and overlaps are removed afterwards by ``layout_rescale``.
+
+``prior`` tours (already placed, e.g. ActivitySim's mandatory tours before the
+non-mandatory frequency choice) occupy the timetable from the start and take part
+in the ``rescale`` layout; they are returned with the new tours.
 """
 
 from dataclasses import dataclass, field
@@ -32,6 +36,7 @@ class PlannedTour:
     end: float | None = None
     outbound: list[tuple[str, float]] = field(default_factory=list)
     inbound: list[tuple[str, float]] = field(default_factory=list)
+    n_remaining: int = 0  # tours still to schedule after this one (ActivitySim look-ahead term)
 
     @property
     def duration(self) -> float:
@@ -49,11 +54,15 @@ def place_tours(
     timing: str = "tod",
     consistency: str = "constraint",
     max_resample: int = 50,
+    prior: list[PlannedTour] = (),
 ) -> list[PlannedTour]:
-    """Assign [start, end) to each tour; returns the tours that could be placed."""
+    """Assign [start, end) to each tour; returns the prior and newly placed tours, sorted by start."""
     tw = TimeWindow()
     constrained = consistency == "constraint"
-    placed: list[PlannedTour] = []
+    placed: list[PlannedTour] = list(prior)
+    if constrained:
+        for t in prior:
+            tw.reserve(int(t.start), int(t.end))
     for t in tours:
         interval = None
         if timing == "independent":
@@ -65,7 +74,7 @@ def place_tours(
                 interval = None
             else:
                 for attempt in range(max_resample + 1):
-                    interval = model.sample(t.z, tw, rng, use_mask=constrained)
+                    interval = model.sample(t.z, tw, rng, use_mask=constrained, n_remaining=t.n_remaining)
                     if interval is not None:
                         break
                     report.resamples += 1
@@ -76,7 +85,7 @@ def place_tours(
         if constrained:
             tw.reserve(int(t.start), int(t.end))
         placed.append(t)
-    if not constrained and placed:
+    if not constrained and len(placed) > len(prior):
         new, changed = layout_rescale([(t.start, t.end) for t in placed], buffer)
         placed.sort(key=lambda t: t.start)
         for t, (s, e) in zip(placed, new):

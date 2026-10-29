@@ -16,11 +16,11 @@ import pandas as pd
 import polars as pl
 import pytest
 
-from composhed.data import LABEL_COLS, build_training_dataset, encode_features
+from composhed.data import ACTIVITY_TYPES, LABEL_COLS, build_training_dataset, derive_type_records, encode_features
 from composhed.models.mdcev import MDCEVModel
 from tests.test_integration import _make_synthetic_data
 
-TYPES = MDCEVModel.TYPES
+TYPES = ACTIVITY_TYPES
 K = len(TYPES)
 BUDGET = MDCEVModel.BUDGET
 
@@ -45,7 +45,7 @@ def tiny_mdcev():
     bio_logger = logging.getLogger("biogeme")
     bio_logger.setLevel(logging.ERROR)
 
-    model = MDCEVModel().fit(records, feature_names, X=X)
+    model = MDCEVModel().fit(derive_type_records(records), feature_names, types=TYPES, X=X)
     return model, X, feature_names
 
 

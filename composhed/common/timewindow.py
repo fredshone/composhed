@@ -43,6 +43,12 @@ class TimeWindow:
         ends = np.flatnonzero(d == -1)
         return list(zip(starts.tolist(), ends.tolist()))
 
+    def busy_intervals(self) -> list[tuple[int, int]]:
+        """Reserved (out-of-home) intervals as (start, end)."""
+        busy = np.concatenate([[False], self.busy, [False]]).astype(np.int8)
+        d = np.diff(busy)
+        return list(zip(np.flatnonzero(d == 1).tolist(), np.flatnonzero(d == -1).tolist()))
+
     def usable_windows(self, buffer: int = 0) -> list[tuple[int, int]]:
         """Free windows shrunk by ``buffer`` next to reserved tours and by 1 at the day edges.
 

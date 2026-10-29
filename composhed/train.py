@@ -12,6 +12,7 @@ from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 
 from composhed.data import (
+    DISC_TYPES,
     LABEL_COLS,
     build_training_dataset,
     compute_mean_home_times,
@@ -67,7 +68,7 @@ def _print_validation(step: str, metrics: dict) -> None:
                 label = f"slot {slot}" if slot != "overall" else "overall"
                 print(f"    {label:<8}  n={m['n']:>5}  accuracy {m['accuracy']:.3f}")
 
-    for atype in ("escort", "medical", "other", "shop", "visit"):
+    for atype in DISC_TYPES:
         if atype in metrics:
             m = metrics[atype]
             print(f"    {atype:<8}  n={m['n']:>5}  log-R² {m['log_r2']:.3f}  MAE {m['mae_minutes']:.0f} min")

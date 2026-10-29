@@ -2,7 +2,9 @@
 
 import numpy as np
 
-_MDCEV_DISC_TYPES = ["escort", "medical", "other", "shop", "visit"]
+from composhed.data import DISC_TYPES
+
+_MDCEV_DISC_TYPES = DISC_TYPES
 
 # Minimum home time between separate home-based tours.
 # This is a modelling assumption: represents the minimum time needed to

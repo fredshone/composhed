@@ -2,9 +2,9 @@
 
 Trains and generates both existing variants on the synthetic fixture from
 ``test_integration`` with a fixed seed and compares SHA-256 hashes of the
-generated CSVs against values captured at commit 0e72e35, before any of the
-source-aligned variants were added. The hashes are machine-specific (BLAS,
-optimiser builds); regenerate them with ``python -m tests.test_regression_existing``
+generated CSVs against values captured on 2026-10-29, after the fixture moved
+to the foundata NTS 2023 schema (leisure replaces medical, veh_per_adult
+replaces vehicles). The hashes are machine-specific (BLAS, optimiser builds); regenerate them with ``python -m tests.test_regression_existing``
 on a clean checkout if the environment changes.
 """
 
@@ -22,10 +22,10 @@ from tests.test_integration import (
 )
 
 GOLDEN = {
-    "compositional_attributes": "cbc137931ddf523fcbbc60ae71cdd80e6a88ded804a7f984287db08aa8a3f237",
-    "compositional_schedules": "cb044e197176d1c01fbf654d2f91364d4915bb710512fffcf83ea84ce3dfc3aa",
-    "mdcev_attributes": "cbc137931ddf523fcbbc60ae71cdd80e6a88ded804a7f984287db08aa8a3f237",
-    "mdcev_schedules": "329f915f248ee32ceea0c050324486b4480346d231ca8f166665f7b08975e451",
+    "compositional_attributes": "71401156662e7895f8525ca68627012f7585a0494b32efc70baf4ef31bb7e610",
+    "compositional_schedules": "37539506b9838840be181fca79e211c97f519a7059a7600d086bb6e48d48619b",
+    "mdcev_attributes": "71401156662e7895f8525ca68627012f7585a0494b32efc70baf4ef31bb7e610",
+    "mdcev_schedules": "77f38aa1fd6919a50dcbc818c3b55e9408fbe2ec82708466899bb1b1de75cec1",
 }
 
 

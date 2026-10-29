@@ -1,21 +1,51 @@
-"""DaySim-aligned generation chain (DAY-1 … DAY-9)."""
+"""DaySim-aligned generation chain, in DaySim's ``ChoiceModelRunner`` order.
+
+Day pattern → exact number of tours per purpose → for each tour in priority
+order: tour time (arrival and departure at the primary destination) → its
+half-tours, each working outwards from the primary destination: generate the
+next stop's purpose (or none), then time the current stop's outer boundary
+with the trip time model → reserve the whole tour in the time window → next
+tour. Minutes are drawn uniformly inside the chosen periods.
+
+A stop's purpose excludes the purpose of the activity next to it (the primary
+or the previous stop): without locations two neighbouring activities of one
+type would merge into one. A stop whose boundary has no free minute is dropped
+(counted).
+"""
 
 import numpy as np
 
+from composhed.activitysim.persontype import person_type
 from composhed.common.calibration import share_dict
 from composhed.common.report import GenerationReport
-from composhed.common.tourgen import PlannedTour, fit_stop_durations, place_tours, tours_to_rows
-from composhed.daysim.data import pattern_tours, tod_group
+from composhed.common.schedule import home_day
+from composhed.common.timewindow import TimeWindow
+from composhed.common.tod import layout_rescale
+from composhed.common.tourgen import PlannedTour, tours_to_rows
+from composhed.daysim.data import (
+    MAX_TOURS_PER_PURPOSE,
+    STOP_PURPOSES,
+    TOUR_PURPOSES,
+    pattern_label,
+    pattern_tours,
+    tod_group,
+)
 from composhed.daysim.models import (
     DIRECTIONS,
     GROUPS,
     MAX_STOPS,
-    STOP_PURPOSES,
+    NONE,
+    NT,
+    STOPGEN_CLASSES,
     DaysimModels,
-    tour_z_rows,
-    x_nstops,
-    x_stop_duration,
-    x_stop_purpose,
+    half_tour_stops,
+    person_x,
+    tour_ranks,
+    tt_flags,
+    window_around,
+    x_exact,
+    x_stopgen,
+    z_tod_values,
 )
 
 
@@ -30,84 +60,152 @@ class DaysimChain:
     def generate(self, xl: np.ndarray, attrs: dict, rng: np.random.Generator,
                  report: GenerationReport) -> tuple[list[dict], dict]:
         m = self.m
-        label = m.pattern.sample(xl[None, :], rng)[0]
+        ptype = person_type(attrs["age"], attrs["employment"])
+        xp = person_x(xl, ptype)
+        label = m.pattern.sample(xp[None, :], rng)[0]
         vec = m.pattern_vectors[label]
-        flag = vec[-1]
-        purposes = pattern_tours(vec)
-        tours = [PlannedTour(p, tod_group(p), z) for p, z in zip(purposes, tour_z_rows(xl, purposes))]
-        tours = [t for t in tours if m.tod.get(t.group) is not None]
-        placed = place_tours(tours, m.tod, m.indep, xl, rng, report, m.home_inter, self.timing,
-                             self.consistency, self.max_resample)
-        trace = {"pattern": label, "tours": [], "stop_purposes": []}
-        need_mand_stop = bool(flag)
-        for t in placed:
-            n_out, n_in = self._n_stops(xl, t, flag, need_mand_stop, rng)
-            if t.purpose in ("work", "education") and n_out + n_in > 0:
-                need_mand_stop = False
-            # Every stop and the primary activity need at least one minute (DAY-9: drop, counted).
-            while n_out + n_in + 1 > int(t.duration):
-                if n_out >= n_in:
-                    n_out -= 1
-                else:
-                    n_in -= 1
-                report.stops_dropped += 1
-            self._fill_stops(xl, t, n_out, n_in, rng, report, trace)
-            trace["tours"].append((t.group, t.start, t.end, n_out, n_in))
+        trace = {"pattern": label, "exact": [], "tours": [], "stopgen": []}
+        counts = {}
+        for p, f in zip(TOUR_PURPOSES, vec[:NT]):
+            if f:
+                model = m.exact[p]
+                counts[p] = int(model.sample(x_exact(xp, vec)[None, :], rng)[0]) if not isinstance(model, int) else model
+                trace["exact"].append((p, counts[p]))
+        purposes = pattern_tours(vec, counts)
+        if not purposes:
+            return home_day(), trace
+        constrained = self.consistency == "constraint"
+        tw = TimeWindow()
+        stops_left = sum(vec[NT:])
+        stops_so_far = 0
+        pattern_stops = {p for p, f in zip(STOP_PURPOSES, vec[NT:]) if f}
+        female = attrs.get("sex") == "female"
+        placed: list[PlannedTour] = []
+        for purpose, (rank, n, si, sc) in zip(purposes, tour_ranks(purposes)):
+            g = tod_group(purpose)
+            tod = m.tod.get(g)
+            if tod is None:
+                report.tours_dropped += 1
+                continue
+            z = tod.z(z_tod_values(attrs, ptype, purpose, rank, n, si, sc, vec, m.income_levels))
+            interval = self._tour_time(g, z, xl, tw if constrained else TimeWindow(), rng, report,
+                                       n - rank - 1, rank > 0, stops_left)
+            if interval is None:
+                report.tours_dropped += 1
+                continue
+            arr, dep = interval
+            lo, hi = window_around(tw if constrained else TimeWindow(), arr, dep, m.home_inter)
+            t = PlannedTour(purpose, g, z)
+            sides = {}
+            for direction in DIRECTIONS:
+                outbound = direction == "outbound"
+                stops, k_used = self._half_tour(xp, ptype, attrs, purpose, outbound, arr if outbound else dep, lo, hi,
+                                                n - rank - 1, stops_so_far, female, pattern_stops, tw, rng, report,
+                                                trace)
+                sides[direction] = stops
+                stops_so_far += k_used
+            # Outbound stops were generated outwards; lay them out in time order.
+            out = list(reversed(sides["outbound"]))
+            t.start = float(out[0][1]) if out else float(arr)
+            t.end = float(sides["inbound"][-1][2]) if sides["inbound"] else float(dep)
+            t.outbound = [(p, float(e - s)) for p, s, e in out]
+            t.inbound = [(p, float(e - s)) for p, s, e in sides["inbound"]]
+            stops_left = max(stops_left - len(out) - len(sides["inbound"]), 0)
+            if constrained:
+                tw.reserve(int(t.start), int(t.end))
+            placed.append(t)
+            trace["tours"].append((g, arr, dep))
+        if not constrained and placed:
+            self._rescale(placed, report)
+        placed.sort(key=lambda t: t.start)
         return tours_to_rows(placed, report), trace
 
-    def _n_stops(self, xl, t, flag, need_mand_stop, rng) -> tuple[int, int]:
-        mand = t.purpose in ("work", "education")
-        if mand and not flag:
-            return 0, 0
-        x = x_nstops(xl, t.purpose, t.start, t.end, flag)[None, :]
-        for _ in range(20):
-            n_out = int(self.m.nstops["outbound"].sample(x, rng)[0])
-            n_in = int(self.m.nstops["inbound"].sample(x, rng)[0])
-            if not (mand and need_mand_stop) or n_out + n_in > 0:
-                return n_out, n_in
-        return n_out, max(n_in, 1)
+    def _tour_time(self, g, z, xl, tw, rng, report, n_remaining, later, stops_left):
+        m = self.m
+        if self.timing == "independent":
+            interval, used = m.indep[g].sample(xl, tw, rng, m.home_inter, self.max_resample)
+            report.resamples += used if interval is not None else self.max_resample
+            return interval
+        tod = m.tod[g]
+        if not tod.mask(tw).any():
+            return None
+        for _ in range(self.max_resample + 1):
+            interval = tod.sample(z, tw, rng, n_remaining=n_remaining, later=later, stops_left=stops_left)
+            if interval is not None:
+                return interval
+            report.resamples += 1
+        return None
 
-    def _fill_stops(self, xl, t, n_out, n_in, rng, report, trace) -> None:
-        truncate = self.consistency == "constraint"
-        dur = t.duration
-        remaining = dur - 1.0  # keep >= 1 min of primary activity
-        n_total = n_out + n_in
-        sampled: dict[str, list] = {"outbound": [], "inbound": []}
-        k_all = 0
-        for direction, n in (("outbound", n_out), ("inbound", n_in)):
-            for k in range(n):
-                model = self.m.stop_purpose[direction] or self.m.stop_purpose["outbound" if direction == "inbound" else "inbound"]
-                purpose = model.sample(x_stop_purpose(xl, t.purpose, k, dur)[None, :], rng)[0]
-                reserve = n_total - k_all - 1
-                hi = remaining - reserve if truncate else np.inf
-                d = float(self.m.stop_duration[purpose].sample(
-                    x_stop_duration(xl, direction, t.purpose, dur)[None, :], rng, lo=1.0, hi=max(hi, 1.0))[0])
-                sampled[direction].append((purpose, d))
-                trace["stop_purposes"].append(purpose)
-                remaining -= d
-                k_all += 1
-        if not truncate:
-            durs = fit_stop_durations([d for _, d in sampled["outbound"] + sampled["inbound"]], dur - 1.0, False, report)
-            flat = [p for p, _ in sampled["outbound"] + sampled["inbound"]]
-            rescaled = list(zip(flat, durs))
-            sampled = {"outbound": rescaled[:n_out], "inbound": rescaled[n_out:]}
-        t.outbound, t.inbound = sampled["outbound"], sampled["inbound"]
+    def _half_tour(self, xp, ptype, attrs, tour_purpose, outbound, anchor, lo, hi, remaining_tours, stops_so_far,
+                   female, pattern_stops, tw, rng, report, trace) -> tuple[list[tuple[str, int, int]], int]:
+        """Stops of one half-tour, outwards from the primary: [(purpose, start, end)]."""
+        m = self.m
+        out = []
+        prev = tour_purpose
+
+        def next_purpose(k, anchor_, prev_):
+            if k >= MAX_STOPS:
+                return NONE
+            wh = ((anchor_ - lo) if outbound else (hi - anchor_)) / 60.0
+            x = x_stopgen(xp, tour_purpose, outbound, k, wh, anchor_, remaining_tours, stops_so_far + len(out), female)
+            avail = np.array([[c == NONE or (c in pattern_stops and c != prev_) for c in STOPGEN_CLASSES]])
+            choice = m.stopgen.sample(x[None, :], rng, avail)[0]
+            trace["stopgen"].append(choice)
+            return choice
+
+        purpose = next_purpose(0, anchor, prev)
+        k = 0
+        while purpose != NONE:
+            # DaySim generates the next stop before timing this one (the trip-remaining term needs it).
+            following = next_purpose(k + 1, anchor, purpose)
+            flags = tt_flags(ptype, outbound, tour_purpose, purpose, attrs)
+            state = (anchor, lo, hi, outbound, flags, float(following != NONE), remaining_tours, tw.remaining())
+            outer = m.trip_time.sample(m.trip_time.z(flags), state, rng) if m.trip_time is not None else None
+            if outer is None:
+                report.stops_dropped += 1
+                break
+            out.append((purpose, outer, anchor) if outbound else (purpose, anchor, outer))
+            anchor = outer
+            purpose = following
+            k += 1
+        return out, len(out)
+
+    def _rescale(self, placed: list[PlannedTour], report) -> None:
+        """AB-3: shift and shrink overlapping tours; stops keep their share of their tour."""
+        new, changed = layout_rescale([(t.start, t.end) for t in placed], self.m.home_inter)
+        placed.sort(key=lambda t: t.start)
+        for t, (s, e) in zip(placed, new):
+            f = (e - s) / max(t.end - t.start, 1e-9)
+            t.outbound = [(p, d * f) for p, d in t.outbound]
+            t.inbound = [(p, d * f) for p, d in t.inbound]
+            t.start, t.end = s, e
+        if changed:
+            report.rescales += 1
 
 
 # ---- calibration statistics --------------------------------------------------------------------
 def record_trace(rec, models: DaysimModels) -> dict:
+    stopgen = []
+    for t in rec.tours:
+        for direction in DIRECTIONS:
+            stops = half_tour_stops(t, direction == "outbound")
+            stopgen += [s[0] for s in stops[:MAX_STOPS]] + ([NONE] if len(stops) < MAX_STOPS else [])
     return {
-        "pattern": models.map_pattern(rec.pattern),
-        "tours": [(tod_group(t.purpose), t.start, t.end, len(t.outbound), len(t.inbound)) for t in rec.tours],
-        "stop_purposes": [s.act for t in rec.tours for s in t.stops],
+        "pattern": pattern_label(rec.model_pattern),
+        "exact": [(p, min(c, MAX_TOURS_PER_PURPOSE)) for p, c in rec.counts.items() if c > 0],
+        "tours": [(tod_group(t.purpose), t.primary_start, t.primary_start + t.primary_duration) for t in rec.tours],
+        "stopgen": stopgen,
     }
 
 
 def trace_stats(traces: list[dict], models: DaysimModels, timing: str = "tod") -> dict[str, dict]:
-    out: dict[str, dict] = {"pattern": share_dict([t["pattern"] for t in traces], list(models.pattern_vectors))}
+    out: dict[str, dict] = {"pattern": share_dict([t["pattern"] for t in traces], list(models.pattern_vectors)),
+                            "stopgen": share_dict([c for t in traces for c in t["stopgen"]], STOPGEN_CLASSES)}
+    for p in TOUR_PURPOSES:
+        vals = [c for t in traces for q, c in t["exact"] if q == p]
+        if vals and not isinstance(models.exact.get(p), int):
+            out[f"exact_{p}"] = share_dict(vals, list(range(1, MAX_TOURS_PER_PURPOSE + 1)))
     tours = [x for t in traces for x in t["tours"]]
-    for direction, col in (("outbound", 3), ("inbound", 4)):
-        out[f"stops_{direction}"] = share_dict([min(x[col], MAX_STOPS) for x in tours], range(MAX_STOPS + 1))
     for g in GROUPS:
         tod = models.tod.get(g)
         gt = [x for x in tours if x[0] == g]

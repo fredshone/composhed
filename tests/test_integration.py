@@ -20,7 +20,7 @@ from composhed.train import train
 
 ATTR_FIELDNAMES = [
     "pid", "age", "hh_income", "sex", "employment",
-    "day", "hh_zone", "access_egress_distance", "vehicles",
+    "day", "hh_zone", "access_egress_distance", "veh_per_adult",
 ]
 SCHED_FIELDNAMES = ["pid", "act", "start", "end", "duration"]
 
@@ -46,10 +46,10 @@ def _make_synthetic_data():
     attr_rows = []
     sched_rows = []
 
-    def add(pid, age, hh_income, sex, employment, day, hh_zone, dist, vehicles, activities):
+    def add(pid, age, hh_income, sex, employment, day, hh_zone, dist, veh_per_adult, activities):
         attr_rows.append(dict(
             pid=pid, age=age, hh_income=hh_income, sex=sex, employment=employment,
-            day=day, hh_zone=hh_zone, access_egress_distance=dist, vehicles=vehicles,
+            day=day, hh_zone=hh_zone, access_egress_distance=dist, veh_per_adult=veh_per_adult,
         ))
         for act, start, end, dur in activities:
             sched_rows.append(dict(pid=pid, act=act, start=start, end=end, duration=dur))
@@ -95,7 +95,7 @@ def _make_synthetic_data():
             ("home", 0, 480, 480), ("work", 480, 780, 300),
             ("shop", 780, 840, 60), ("home", 840, 1440, 600)]),
         ("45-59", 4, "M", "employed",   "Wed", "zone1", 1.5, 2, [
-            ("home", 0, 360, 360), ("medical", 360, 420, 60),
+            ("home", 0, 360, 360), ("leisure", 360, 420, 60),
             ("work", 420, 780, 360), ("visit", 780, 840, 60), ("home", 840, 1440, 600)]),
         ("30-44", 3, "F", "employed",   "Thu", "zone2", 1.0, 1, [
             ("home", 0, 480, 480), ("work", 480, 780, 300),
@@ -108,7 +108,7 @@ def _make_synthetic_data():
             ("work", 420, 720, 300), ("shop", 720, 780, 60), ("home", 780, 1440, 660)]),
         ("45-59", 4, "M", "employed",   "Tue", "zone1", 1.5, 2, [
             ("home", 0, 480, 480), ("work", 480, 840, 360),
-            ("medical", 840, 900, 60), ("other", 900, 960, 60), ("home", 960, 1440, 480)]),
+            ("leisure", 840, 900, 60), ("other", 900, 960, 60), ("home", 960, 1440, 480)]),
         ("30-44", 3, "F", "employed",   "Wed", "zone2", 1.0, 1, [
             ("home", 0, 360, 360), ("shop", 360, 420, 60), ("work", 420, 720, 300),
             ("visit", 720, 780, 60), ("escort", 780, 840, 60), ("home", 840, 1440, 600)]),
@@ -119,7 +119,7 @@ def _make_synthetic_data():
             ("home", 0, 480, 480), ("work", 480, 780, 300),
             ("visit", 780, 840, 60), ("home", 840, 1440, 600)]),
         ("30-44", 3, "M", "employed",   "Mon", "zone1", 1.0, 1, [
-            ("home", 0, 360, 360), ("medical", 360, 420, 60), ("work", 420, 720, 300),
+            ("home", 0, 360, 360), ("leisure", 360, 420, 60), ("work", 420, 720, 300),
             ("shop", 720, 780, 60), ("other", 780, 840, 60), ("home", 840, 1440, 600)]),
         ("18-29", 2, "F", "employed",   "Tue", "zone2", 2.0, 0, [
             ("home", 0, 480, 480), ("work", 480, 780, 300),
@@ -127,13 +127,13 @@ def _make_synthetic_data():
         ("45-59", 4, "M", "employed",   "Wed", "zone1", 1.5, 2, [
             ("home", 0, 420, 420), ("work", 420, 720, 300),
             ("other", 720, 780, 60), ("visit", 780, 840, 60),
-            ("medical", 840, 900, 60), ("home", 900, 1440, 540)]),
+            ("leisure", 840, 900, 60), ("home", 900, 1440, 540)]),
         ("30-44", 3, "F", "employed",   "Thu", "zone2", 1.0, 1, [
             ("home", 0, 360, 360), ("other", 360, 420, 60),
             ("work", 420, 720, 300), ("home", 720, 1440, 720)]),
         ("30-44", 3, "M", "employed",   "Fri", "zone1", 2.0, 1, [
             ("home", 0, 480, 480), ("work", 480, 780, 300),
-            ("shop", 780, 840, 60), ("medical", 840, 900, 60), ("home", 900, 1440, 540)]),
+            ("shop", 780, 840, 60), ("leisure", 840, 900, 60), ("home", 900, 1440, 540)]),
     ]
     for i, (age, inc, sex, emp, day, zone, dist, veh, acts) in enumerate(wd_data):
         add(13 + i, age, inc, sex, emp, day, zone, dist, veh, acts)
@@ -175,7 +175,7 @@ def _make_synthetic_data():
             ("education", 420, 720, 300), ("home", 720, 1440, 720)]),
         ("18-29", 3, "M", "student", "Fri", "zone1", 2.0, 0, [
             ("home", 0, 480, 480), ("education", 480, 780, 300),
-            ("medical", 780, 840, 60), ("home", 840, 1440, 600)]),
+            ("leisure", 780, 840, 60), ("home", 840, 1440, 600)]),
     ]
     for i, (age, inc, sex, emp, day, zone, dist, veh, acts) in enumerate(ed_data):
         add(33 + i, age, inc, sex, emp, day, zone, dist, veh, acts)
@@ -192,7 +192,7 @@ def _make_synthetic_data():
             ("home", 0, 480, 480), ("escort",  480, 540, 60),
             ("other", 540, 600, 60), ("home", 600, 1440, 840)]),
         ("60+",   4, "F", "retired",     "Thu", "zone2", 1.0, 1, [
-            ("home", 0, 480, 480), ("medical", 480, 540, 60), ("home", 540, 1440, 900)]),
+            ("home", 0, 480, 480), ("leisure", 480, 540, 60), ("home", 540, 1440, 900)]),
         ("45-59", 3, "M", "not working", "Fri", "zone1", 1.5, 0, [
             ("home", 0, 540, 540), ("shop",    540, 600, 60),
             ("visit", 600, 660, 60), ("home", 660, 1440, 780)]),
@@ -203,13 +203,13 @@ def _make_synthetic_data():
             ("home", 0, 540, 540), ("escort",  540, 600, 60), ("home", 600, 1440, 840)]),
         ("45-59", 3, "F", "not working", "Wed", "zone2", 1.5, 0, [
             ("home", 0, 480, 480), ("visit",   480, 540, 60),
-            ("medical", 540, 600, 60), ("home", 600, 1440, 840)]),
+            ("leisure", 540, 600, 60), ("home", 600, 1440, 840)]),
         ("45-59", 2, "M", "employed",    "Thu", "zone1", 2.0, 1, [
             ("home", 0, 540, 540), ("shop",    540, 600, 60), ("home", 600, 1440, 840)]),
         ("60+",   4, "F", "retired",     "Fri", "zone2", 1.0, 1, [
             ("home", 0, 600, 600), ("other",   600, 660, 60), ("home", 660, 1440, 780)]),
         ("60+",   3, "M", "retired",     "Mon", "zone1", 1.5, 0, [
-            ("home", 0, 480, 480), ("medical", 480, 540, 60), ("home", 540, 1440, 900)]),
+            ("home", 0, 480, 480), ("leisure", 480, 540, 60), ("home", 540, 1440, 900)]),
         ("45-59", 2, "F", "not working", "Tue", "zone2", 2.0, 0, [
             ("home", 0, 540, 540), ("escort",  540, 600, 60), ("home", 600, 1440, 840)]),
         ("30-44", 4, "M", "employed",    "Wed", "zone1", 1.0, 1, [

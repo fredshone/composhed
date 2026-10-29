@@ -11,7 +11,12 @@ the frameworks themselves. All three:
   the [compositional baseline](compositional.md));
 * model one person's day, with no household interactions or joint trips;
 * re-estimate every coefficient on NTS 2023. No published coefficients are
-  reused;
+  reused, but the utility terms follow each source's own specification (DaySim's
+  C# model code, ActivitySim's `prototype_mtc` spec files), so the fit to NTS
+  comes only through those forms;
+* turn chosen time periods into minutes by a uniform draw over the free minutes
+  of the period (DaySim's `GetAvailableMinute`; ActivitySim stops at periods),
+  never from NTS's observed minutes;
 * read their training data through one shared set of tour rules
   ([tour_rules.md](tour_rules.md));
 * share their code in `composhed/common/` (choice models, duration models,
@@ -46,11 +51,15 @@ Each variant adds its own options; see its page.
 
 Estimated models rarely reproduce the training data exactly once they are
 chained together, so all three variants calibrate the way practitioners
-calibrate the real frameworks. Each pass:
+calibrate the real frameworks (by their own iterative scripts: ActivitySim, for
+one, has no built-in calibration). Each pass:
 
-1. Simulates the whole chain for a fixed sample of training people. The same
-   random numbers are reused in every pass, so differences between passes come
-   from the adjustments, not from noise.
+1. Simulates the whole chain for a fixed sample of training people. Every pass
+   restarts the random generator from the same seed. This reuses the random
+   numbers only approximately: one generator runs through all people in turn,
+   so once a person's choices change, the number of draws they take changes
+   and everyone after them gets different numbers. (ActivitySim instead gives
+   each person and model step its own random stream.)
 2. Compares simulated shares and means against the training data.
 3. Moves each constant by a damped log-ratio step towards its target.
 
@@ -64,7 +73,9 @@ of passes. The best pass is kept, not the last.
 
 Each variant's page lists what it calibrates. The full report, with each
 target's history and tolerance, is in `validation.json` under
-`info.calibration`. On NTS 2023 every target converges for all three variants.
+`info.calibration`. On NTS 2023 (5 seeds) CEMDAP and DaySim converge on every
+seed. ActivitySim does not always converge, because its targets interact; see
+[its page](activitysim.md#calibration).
 
 ## Feasibility and the generation report
 

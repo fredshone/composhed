@@ -2,7 +2,9 @@
 
 Each segment with at least ``n_min`` observations gets its own model; smaller
 segments share a pooled model fitted on all observations (pooling is logged).
-``segmented=False`` (AB-5) uses the pooled model for everyone.
+``segmented=False`` (AB-5) uses the pooled model for everyone. ``factory`` builds
+each segment's model (default: an alternative-specific ``MNL``; ActivitySim's
+non-mandatory tour frequency and stop frequency use ``AltAttrMNL``).
 """
 
 import numpy as np
@@ -13,22 +15,26 @@ POOLED = "__pooled__"
 
 
 class SegmentedMNL:
-    def __init__(self, n_min: int = 200, segmented: bool = True, l2: float = 1e-4) -> None:
+    def __init__(self, n_min: int = 200, segmented: bool = True, l2: float = 1e-4, factory=None) -> None:
         self.n_min = n_min
         self.segmented = segmented
         self.l2 = l2
+        self.factory = factory
+
+    def _new(self):
+        return self.factory() if self.factory is not None else MNL(self.l2)
 
     def fit(self, X: np.ndarray, y: list, segments: list, classes: list, avail: np.ndarray | None = None,
             feature_names: list[str] | None = None) -> "SegmentedMNL":
         segments = np.asarray(segments, dtype=object)
         y = list(y)
         self.classes_ = list(classes)
-        self.models: dict = {POOLED: MNL(self.l2).fit(X, y, classes, avail, feature_names)}
+        self.models: dict = {POOLED: self._new().fit(X, y, classes, avail, feature_names)}
         self.pooled_segments: list = []
         for seg in sorted(set(segments.tolist()), key=str):
             sel = segments == seg
             if self.segmented and sel.sum() >= self.n_min:
-                self.models[seg] = MNL(self.l2).fit(
+                self.models[seg] = self._new().fit(
                     X[sel], [v for v, s in zip(y, sel) if s], classes,
                     None if avail is None else avail[sel], feature_names)
             else:

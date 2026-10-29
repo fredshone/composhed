@@ -8,9 +8,16 @@
   gradient; statsmodels ``OrderedModel`` uses numerical scores and is too slow
   for the many repeated fits here.
 * ``ConditionalLogit`` — alternative-attribute logit for joint start/end choice:
-  ``V_nj = f_j·γ + z_n·B·g_j + offset_j`` with sparse generic alternative features
-  ``f_j`` (period dummies, duration bins), dense shape features ``g_j`` interacted
-  with person features ``z_n``, and availability.
+  ``V_nj = f_j·γ + z_n·B·g_j + a_nj·δ + offset_j`` with sparse generic alternative
+  features ``f_j`` (period dummies, duration bins), dense shape features ``g_j``
+  interacted with person features ``z_n``, optional chooser-specific alternative
+  attributes ``a_nj`` (e.g. timetable terms; supplied per chunk by a callable so the
+  N × J × K array is never held in memory) and availability. ``b_mask`` restricts
+  ``B`` to named (person feature, alternative attribute) pairs, as in an
+  ActivitySim spec or a DaySim utility function, instead of every interaction.
+* ``AltAttrMNL`` — ActivitySim ``interaction_simulate``-style logit over a fixed
+  alternative table: alternative attributes (e.g. tour counts per purpose)
+  interacted with person features, with the ``MNL`` interface.
 
 Every model carries an ``offset`` vector over alternatives added to utilities
 (log-probabilities for the ordered logit); the calibration stage adjusts it.
@@ -291,7 +298,12 @@ class OrderedLogit:
 
 
 class ConditionalLogit:
-    """Logit over a fixed alternative table with alternative attributes and availability."""
+    """Logit over a fixed alternative table with alternative attributes and availability.
+
+    ``dyn`` (optional, every method): callable ``dyn(s, e) -> (e - s, J, n_dyn)`` returning the
+    chooser-specific alternative attributes of rows ``s:e``. ``b_mask`` (Kz × Kg, bool):
+    only these entries of ``B`` are estimated; the rest are fixed at zero.
+    """
 
     def __init__(
         self,
@@ -301,6 +313,8 @@ class ConditionalLogit:
         l2: float = 1e-3,
         maxiter: int = 300,
         chunk: int = 4000,
+        n_dyn: int = 0,
+        b_mask: np.ndarray | None = None,
     ) -> None:
         self.F = sp.csr_matrix(F)
         self.G = np.asarray(G, dtype=float)
@@ -309,18 +323,30 @@ class ConditionalLogit:
         self.l2 = l2
         self.maxiter = maxiter
         self.chunk = chunk
+        self.n_dyn = n_dyn
+        self.b_mask = None if b_mask is None else np.asarray(b_mask, dtype=bool)
         self.offset = np.zeros(self.J)
         self.gamma_ = np.zeros(self.F.shape[1])
+        self.delta_ = np.zeros(n_dyn)
         self.B_ = None
 
-    def _utilities(self, Z: np.ndarray, gamma: np.ndarray, B: np.ndarray) -> np.ndarray:
-        return (self.F @ gamma)[None, :] + (Z @ B) @ self.G.T + self.offset[None, :]
+    def _utilities(self, Z: np.ndarray, gamma: np.ndarray, B: np.ndarray, A: np.ndarray | None = None,
+                   delta: np.ndarray | None = None) -> np.ndarray:
+        V = (self.F @ gamma)[None, :] + (Z @ B) @ self.G.T + self.offset[None, :]
+        if A is not None and len(delta):
+            V = V + A @ delta
+        return V
 
-    def fit(self, Z: np.ndarray, y: np.ndarray, avail: np.ndarray | None = None) -> "ConditionalLogit":
+    def _dyn(self, dyn, s: int, e: int) -> np.ndarray | None:
+        if dyn is None or not getattr(self, "n_dyn", 0):  # bundles saved before n_dyn existed
+            return None
+        return dyn(s, e)
+
+    def fit(self, Z: np.ndarray, y: np.ndarray, avail: np.ndarray | None = None, dyn=None) -> "ConditionalLogit":
         Z = np.asarray(Z, dtype=float)
         y = np.asarray(y, dtype=int)
         N, Kz = Z.shape
-        Kf, Kg = self.F.shape[1], self.G.shape[1]
+        Kf, Kg, Ka = self.F.shape[1], self.G.shape[1], self.n_dyn
         if avail is not None:
             avail = avail.copy()
             self.forced_available_ = int((~avail[np.arange(N), y]).sum())
@@ -328,31 +354,60 @@ class ConditionalLogit:
         Fy = np.asarray(self.F[y].todense())
         Gy = self.G[y]
         FT = self.F.T.tocsr()
+        # Chooser-specific attributes are recomputed per chunk (N × J × Ka can exceed memory).
+        Ay = np.zeros(Ka)
+        for s in range(0, N, self.chunk):
+            A = self._dyn(dyn, s, min(N, s + self.chunk))
+            if A is not None:
+                Ay += A[np.arange(len(A)), y[s:s + len(A)]].sum(axis=0)
 
         def obj(theta):
             gamma = theta[:Kf]
-            B = theta[Kf:].reshape(Kz, Kg)
+            B = theta[Kf:Kf + Kz * Kg].reshape(Kz, Kg)
+            delta = theta[Kf + Kz * Kg:]
             ll = 0.0
             g_gamma = Fy.sum(axis=0).copy()
             g_B = Z.T @ Gy
+            g_delta = Ay.copy()
             for s in range(0, N, self.chunk):
                 e = min(N, s + self.chunk)
-                V = self._utilities(Z[s:e], gamma, B)
+                A = self._dyn(dyn, s, e)
+                V = self._utilities(Z[s:e], gamma, B, A, delta)
                 logP = _log_softmax(V, None if avail is None else avail[s:e])
                 ll += np.sum(logP[np.arange(e - s), y[s:e]])
                 P = np.exp(logP)
                 g_gamma -= np.asarray((FT @ P.T).sum(axis=1)).ravel()
                 g_B -= Z[s:e].T @ (P @ self.G)
+                if A is not None:
+                    g_delta -= np.einsum("nj,njk->k", P, A)
             f = -ll / N + 0.5 * self.l2 * np.sum(theta * theta)
-            g = -np.concatenate([g_gamma, g_B.ravel()]) / N + self.l2 * theta
+            g = -np.concatenate([g_gamma, g_B.ravel(), g_delta]) / N + self.l2 * theta
             return f, g
 
-        theta0 = np.zeros(Kf + Kz * Kg)
-        res = minimize(obj, theta0, jac=True, method="L-BFGS-B", options={"maxiter": self.maxiter})
-        self.gamma_ = res.x[:Kf]
-        self.B_ = res.x[Kf:].reshape(Kz, Kg)
+        mask = getattr(self, "b_mask", None)
+        if mask is None:
+            free = np.ones(Kf + Kz * Kg + Ka, dtype=bool)
+        else:
+            if mask.shape != (Kz, Kg):
+                raise ValueError(f"b_mask has shape {mask.shape}, expected {(Kz, Kg)}")
+            free = np.concatenate([np.ones(Kf, bool), mask.ravel(), np.ones(Ka, bool)])
+
+        def obj_free(x):
+            theta = np.zeros(len(free))
+            theta[free] = x
+            f, g = obj(theta)
+            return f, g[free]
+
+        res = minimize(obj_free, np.zeros(int(free.sum())), jac=True, method="L-BFGS-B",
+                       options={"maxiter": self.maxiter})
+        theta = np.zeros(len(free))
+        theta[free] = res.x
+        self.gamma_ = theta[:Kf]
+        self.B_ = theta[Kf:Kf + Kz * Kg].reshape(Kz, Kg)
+        self.delta_ = theta[Kf + Kz * Kg:]
         self.converged_ = bool(res.success)
         self.n_iter_ = int(res.nit)
+        self.n_params_ = int(free.sum())
         self.llf_ = -float(res.fun - 0.5 * self.l2 * np.sum(res.x * res.x)) * N
         if avail is None:
             self.llnull_ = -N * np.log(self.J)
@@ -364,30 +419,29 @@ class ConditionalLogit:
     def prsquared(self) -> float:
         return 1.0 - self.llf_ / self.llnull_
 
-    def predict_proba(self, Z: np.ndarray, avail: np.ndarray | None = None) -> np.ndarray:
+    def predict_proba(self, Z: np.ndarray, avail: np.ndarray | None = None, dyn=None) -> np.ndarray:
         Z = np.atleast_2d(np.asarray(Z, dtype=float))
         out = np.empty((len(Z), self.J))
         for s in range(0, len(Z), self.chunk):
             e = min(len(Z), s + self.chunk)
-            out[s:e] = np.exp(_log_softmax(
-                self._utilities(Z[s:e], self.gamma_, self.B_), None if avail is None else avail[s:e]
-            ))
+            V = self._utilities(Z[s:e], self.gamma_, self.B_, self._dyn(dyn, s, e), getattr(self, "delta_", None))
+            out[s:e] = np.exp(_log_softmax(V, None if avail is None else avail[s:e]))
         return np.nan_to_num(out)
 
-    def sample(self, Z: np.ndarray, rng: np.random.Generator, avail: np.ndarray | None = None) -> np.ndarray:
+    def sample(self, Z: np.ndarray, rng: np.random.Generator, avail: np.ndarray | None = None, dyn=None) -> np.ndarray:
         """Sample an alternative index per row; rows with no available alternative return -1."""
-        P = self.predict_proba(Z, avail)
+        P = self.predict_proba(Z, avail, dyn)
         empty = P.sum(axis=1) <= 0
         idx = _sample_rows(np.where(empty[:, None], 1.0, P), rng)
         idx[empty] = -1
         return idx
 
-    def validate(self, Z: np.ndarray, y: np.ndarray, avail: np.ndarray | None = None) -> dict:
+    def validate(self, Z: np.ndarray, y: np.ndarray, avail: np.ndarray | None = None, dyn=None) -> dict:
         y = np.asarray(y, dtype=int)
         if avail is not None:
             avail = avail.copy()
             avail[np.arange(len(y)), y] = True
-        P = self.predict_proba(Z, avail)
+        P = self.predict_proba(Z, avail, dyn)
         ll = float(np.sum(np.log(np.maximum(P[np.arange(len(y)), y], 1e-300))))
         ll0 = -float(np.sum(np.log(avail.sum(axis=1)))) if avail is not None else -len(y) * np.log(self.J)
         return {
@@ -395,3 +449,75 @@ class ConditionalLogit:
             "accuracy": float((P.argmax(axis=1) == y).mean()) if len(y) else float("nan"),
             "prsquared": 1.0 - ll / ll0 if ll0 < 0 else float("nan"),
         }
+
+
+class AltAttrMNL:
+    """Logit over a fixed alternative table whose utilities are built from alternative attributes.
+
+    ``V_nj = a_j·γ + x_n·B·c_j + offset_j``: every alternative attribute (column of
+    ``attrs``) gets a generic constant, and every interaction attribute ``c_j``
+    (``inter_attrs``; default the same table) an interaction with each person
+    feature, as an ActivitySim ``interaction_simulate`` spec or a DaySim utility
+    function does. The parameter count is ``n_attrs + K · n_inter`` instead of the
+    ``(K + 1) · (J − 1)`` of an alternative-specific MNL. ``offset`` is alternative-specific, so calibration can still move every share.
+    Same interface as ``MNL`` (``classes_``, ``offset``, ``fit`` / ``predict_proba`` /
+    ``sample`` / ``validate``).
+    """
+
+    def __init__(self, attrs: dict, attr_names: list[str], l2: float = 1e-4, maxiter: int = 500,
+                 inter_attrs: dict | None = None, inter_names: list[str] | None = None) -> None:
+        self.attrs = {k: np.asarray(v, dtype=float) for k, v in attrs.items()}
+        self.attr_names = list(attr_names)
+        self.inter_attrs = None if inter_attrs is None else {k: np.asarray(v, dtype=float) for k, v in inter_attrs.items()}
+        self.inter_names = list(inter_names) if inter_names is not None else self.attr_names
+        self.l2 = l2
+        self.maxiter = maxiter
+
+    @property
+    def offset(self) -> np.ndarray:
+        return self.clogit_.offset
+
+    @offset.setter
+    def offset(self, value) -> None:
+        self.clogit_.offset = np.asarray(value, dtype=float)
+
+    def fit(self, X: np.ndarray, y: list, classes: list | None = None, avail: np.ndarray | None = None,
+            feature_names: list[str] | None = None) -> "AltAttrMNL":
+        y = list(y)
+        self.classes_ = list(classes) if classes is not None else sorted(set(y), key=str)
+        A = np.array([self.attrs[c] for c in self.classes_])
+        inter = getattr(self, "inter_attrs", None)
+        C = A if inter is None else np.array([inter[c] for c in self.classes_])
+        self.clogit_ = ConditionalLogit(A, C, alt_names=self.classes_, l2=self.l2, maxiter=self.maxiter)
+        X = np.asarray(X, dtype=float)
+        self.feature_names_ = list(feature_names or [f"x{i}" for i in range(X.shape[1])])
+        yi = np.array([self.classes_.index(v) for v in y], dtype=int)
+        self.clogit_.fit(X, yi, avail)
+        counts = np.bincount(yi, minlength=len(self.classes_)).astype(float)
+        self.train_shares_ = counts / max(len(y), 1)
+        self.llf_ = self.clogit_.llf_
+        p0 = np.maximum(self.train_shares_, 1e-12)
+        self.llnull_ = float(np.sum(counts * np.log(p0)))
+        self.converged_ = self.clogit_.converged_
+        self.n_params_ = A.shape[1] + C.shape[1] * X.shape[1]
+        return self
+
+    @property
+    def prsquared(self) -> float:
+        return 1.0 - self.llf_ / self.llnull_ if self.llnull_ < 0 else float("nan")
+
+    def coef_table(self) -> dict:
+        out = {"const": dict(zip(self.attr_names, self.clogit_.gamma_.tolist()))}
+        names = getattr(self, "inter_names", self.attr_names)
+        for k, name in enumerate(self.feature_names_):
+            out[name] = dict(zip(names, self.clogit_.B_[k].tolist()))
+        return out
+
+    def predict_proba(self, X: np.ndarray, avail: np.ndarray | None = None) -> np.ndarray:
+        return self.clogit_.predict_proba(np.atleast_2d(np.asarray(X, dtype=float)), avail)
+
+    def sample(self, X: np.ndarray, rng: np.random.Generator, avail: np.ndarray | None = None) -> list:
+        idx = _sample_rows(self.predict_proba(X, avail), rng)
+        return [self.classes_[i] for i in idx]
+
+    validate = MNL.validate

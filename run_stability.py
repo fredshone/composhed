@@ -129,10 +129,12 @@ def _parse_runs(variants: str, ablations: str, skip_compositional: bool, skip_md
 @click.option("--evaluate/--no-evaluate", default=True, show_default=True, help="Run acteval per run")
 @click.option("--split-order", default=None, type=int,
               help="Evaluate per label slice (all LABEL_COLS) at this acteval split order; default unsliced")
+@click.option("--calibrate/--no-calibrate", default=True, show_default=True,
+              help="Calibrate every variant that has a calibration stage (--no-calibrate: AB-1 for all)")
 @click.option("--skip-existing", is_flag=True, default=False,
               help="Skip runs whose metrics.csv already exists")
 def main(attributes, schedules, target_schedules, seeds, out_dir, variants, ablations, mdcev_max_records,
-         skip_compositional, skip_mdcev, evaluate, split_order, skip_existing) -> None:
+         skip_compositional, skip_mdcev, evaluate, split_order, calibrate, skip_existing) -> None:
     seed_list = [int(s.strip()) for s in seeds.split(",")]
     runs = _parse_runs(variants, ablations, skip_compositional, skip_mdcev)
     target = target_schedules or schedules
@@ -142,6 +144,8 @@ def main(attributes, schedules, target_schedules, seeds, out_dir, variants, abla
     for variant, ablation in runs:
         name = f"{variant}__{ablation}" if ablation else variant
         extra = ABLATIONS.get(ablation, [])
+        if not calibrate and variant in ABLATION_VARIANTS["no-calibrate"] and "--no-calibrate" not in extra:
+            extra = extra + ["--no-calibrate"]
         for seed in seed_list:
             run_dir = base / name / f"seed_{seed}"
             if skip_existing and (run_dir / "metrics.csv").exists():

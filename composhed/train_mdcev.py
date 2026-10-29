@@ -1,7 +1,7 @@
 """Train collapsed MDCEV CompSched variant and save to disk.
 
 Pipeline:
-  1. MDCEVModel  — 8-type time allocation (home, work, education, shop, visit, escort, medical, other)
+  1. MDCEVModel  — 8-type time allocation (home, work, education, shop, visit, escort, leisure, other)
   2. EpisodeCountModel — per-type episode count given total allocated minutes
   3. StartTimeModel   — per-enumerated-key start time regression (for assembly ordering)
 """

@@ -36,7 +36,7 @@ model has no calibration step and no built-in ablations.
 ## Inputs
 
 All eight person attributes (`age`, `hh_income`, `sex`, `employment`, `day`,
-`hh_zone`, `access_egress_distance`, `vehicles`) are one-hot encoded, with the
+`hh_zone`, `access_egress_distance`, `veh_per_adult`) are one-hot encoded, with the
 first category dropped. Missing values become their own `"unknown"` category.
 The two logistic models in step 6 also standardise their features; the fitted
 scaler is saved in the model bundle.
@@ -48,7 +48,7 @@ scaler is saved in the model bundle.
 | 1. Day pattern | One of six day types: home only (`H`), work only (`W`), education only (`E`), work + discretionary (`WD`), education + discretionary (`ED`), discretionary only (`D`) | Multinomial logit (statsmodels) | — | `models/dap.py` |
 | 2. Mandatory duration | Total minutes of work or education (`W`, `WD`, `E`, `ED` days) | Log-normal regression with residual noise, clipped to 30–600 min | has-discretionary flag, education flag | `models/mandatory.py` |
 | 3. Number of discretionary activities | 0–4 activities (`WD`, `ED`, `D` days) | Ordered logit (statsmodels); counts that would not fit at 30 min each are ruled out | has-discretionary flag, remaining time budget | `models/ntours.py` |
-| 4. Activity type | escort, medical, other, shop or visit, one per activity | Multinomial logit, one model each for the 1st, 2nd and 3rd+ activity | has-discretionary flag, slot number, remaining budget | `models/atype.py` |
+| 4. Activity type | escort, leisure, other, shop or visit, one per activity | Multinomial logit, one model each for the 1st, 2nd and 3rd+ activity | has-discretionary flag, slot number, remaining budget | `models/atype.py` |
 | 5. Activity duration | Minutes for each discretionary activity | Log-normal regression per activity type with residual noise, clipped to [10 min, remaining budget] | remaining budget | `models/duration.py` |
 | 6a. Anchor time | Start of work / education, or first departure on a `D` day | Kernel density estimate per employment category | — | `models/anchor.py` |
 | 6b. Tour placement (`WD`, `ED`) | Whether each discretionary activity is a stop on the way to or from work / education, or its own trip from home before or after | 4-class logistic regression (scikit-learn) | anchor time, activity type | `models/anchor.py` |

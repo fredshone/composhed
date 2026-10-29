@@ -9,17 +9,19 @@ from composhed.common.calibration import location_accessors, offset_accessors
 from composhed.common.cli import make_rng, train_options
 from composhed.common.report import ValidationReport
 from composhed.common.runner import encode_labels, load_training_data, output_paths, run_calibration, targets_from_specs
+from composhed.common.choice import MNL
 from composhed.daysim.chain import DaysimChain, array_accessors, record_trace, trace_stats
-from composhed.daysim.data import build_records
-from composhed.daysim.models import DIRECTIONS, GROUPS, DaysimModels
+from composhed.daysim.data import TOUR_PURPOSES, build_records
+from composhed.daysim.models import GROUPS, DaysimModels
 
 VARIANT = "daysim"
 
 
 def _calibration_specs(m: DaysimModels, timing: str) -> dict:
-    specs = {"pattern": ("share", *offset_accessors(m.pattern))}
-    for k in DIRECTIONS:
-        specs[f"stops_{k}"] = ("share", *offset_accessors(m.nstops[k]))
+    specs = {"pattern": ("share", *offset_accessors(m.pattern)), "stopgen": ("share", *offset_accessors(m.stopgen))}
+    for p in TOUR_PURPOSES:
+        if isinstance(m.exact.get(p), MNL):
+            specs[f"exact_{p}"] = ("share", *offset_accessors(m.exact[p]))
     for g in GROUPS:
         tod = m.tod.get(g)
         if tod is None:
@@ -48,7 +50,6 @@ def train(
     consistency: str = "constraint",
     max_resample: int = 50,
     time_resolution: int = 30,
-    min_support: int = 30,
 ) -> str:
     t0 = time.time()
     print("Loading data...")
@@ -58,13 +59,13 @@ def train(
     records, counters, caps = build_records(attr_df, sched_by_pid, train_pids)
     counters.log()
     if caps:
-        print(f"  non-mandatory tours removed from pattern counts (cap 4): {caps}")
+        print(f"  tours beyond 3 per purpose dropped / days mapped to a feasible pattern: {caps}")
     X, feature_names = encode_labels([r.labels for r in records])
     hold_records = build_records(attr_df, sched_by_pid, hold_pids)[0] if hold_pids else []
     X_hold = encode_labels([r.labels for r in hold_records], feature_names)[0] if hold_records else None
 
     print(f"\nFitting DaySim components (time resolution {time_resolution} min)...")
-    models = DaysimModels(time_resolution=time_resolution, min_support=min_support).fit(records, X, feature_names)
+    models = DaysimModels(time_resolution=time_resolution).fit(records, X, feature_names)
 
     print("\nValidation (in-sample)")
     report = ValidationReport()
@@ -73,7 +74,8 @@ def train(
         report.add(name, metrics, hold.get(name))
     report.info = {"extraction": counters.as_dict(), "pattern_caps": caps, "n_train": len(records),
                    "n_holdout": len(hold_records), "n_patterns": len(models.pattern_vectors),
-                   "pattern_persons_mapped": models.pattern_merged}
+                   "pattern_persons_mapped": models.pattern_merged,
+                   "tod_coefficients": {g: t.coef_table() for g, t in models.tod.items() if t is not None}}
 
     timing = "independent" if independent_timing else "tod"
     chain = DaysimChain(models, timing=timing, consistency=consistency, max_resample=max_resample)
@@ -88,7 +90,7 @@ def train(
         report.info["calibration"] = calib.to_dict()
 
     config = {"timing": timing, "consistency": consistency, "max_resample": max_resample,
-              "time_resolution": time_resolution, "min_support": min_support, "home_inter": models.home_inter,
+              "time_resolution": time_resolution, "home_inter": models.home_inter,
               "calibrate": calibrate, "calib_iters": calib_iters, "calib_sample": calib_sample,
               "holdout_fraction": holdout_fraction, "split_seed": split_seed, "seed": seed}
     path, val_path = output_paths(output_dir, VARIANT)
@@ -103,12 +105,11 @@ def train(
 @train_options
 @click.option("--time-resolution", type=click.Choice(["15", "30", "60"]), default="30", show_default=True,
               help="DAY-10 / AB-4: TOD period length in minutes")
-@click.option("--min-support", default=30, show_default=True, type=int, help="DAY-1 pattern support threshold")
 def main(attributes, schedules, output_dir, seed, holdout_fraction, split_seed, calibrate, calib_iters,
-         calib_sample, independent_timing, consistency, max_resample, time_resolution, min_support) -> None:
+         calib_sample, independent_timing, consistency, max_resample, time_resolution) -> None:
     make_rng(seed)
     train(attributes, schedules, output_dir, seed, holdout_fraction, split_seed, calibrate, calib_iters,
-          calib_sample, independent_timing, consistency, max_resample, int(time_resolution), min_support)
+          calib_sample, independent_timing, consistency, max_resample, int(time_resolution))
 
 
 if __name__ == "__main__":

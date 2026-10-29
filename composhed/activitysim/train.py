@@ -54,7 +54,6 @@ def train(
     time_resolution: int = 60,
     segmentation: bool = True,
     n_min: int = 200,
-    min_support: int = 30,
 ) -> str:
     t0 = time.time()
     print("Loading data...")
@@ -69,15 +68,16 @@ def train(
     if unmapped:
         print(f"  unmapped age × employment (→ NONWORK): {dict(unmapped)}")
     if caps:
-        print(f"  non-mandatory tours removed from frequency counts (cap 4): {caps}")
+        print(f"  tours beyond the frequency caps (2 per mandatory purpose; non-mandatory cap + 2 extension), "
+              f"dropped: {caps}")
     X, feature_names = encode_labels([r.labels for r in records])
     hold_records = build_records(attr_df, sched_by_pid, hold_pids)[0] if hold_pids else []
     X_hold = encode_labels([r.labels for r in hold_records], feature_names)[0] if hold_records else None
 
     print(f"\nFitting ActivitySim components (time resolution {time_resolution} min, "
           f"segmentation {'on' if segmentation else 'off'})...")
-    models = AsimModels(time_resolution=time_resolution, segmented=segmentation, n_min=n_min,
-                        min_support=min_support).fit(records, X, feature_names)
+    models = AsimModels(time_resolution=time_resolution, segmented=segmentation, n_min=n_min).fit(
+        records, X, feature_names)
     for name, seg in (("CDAP", models.cdap), ("MTF", models.mtf), ("NMTF", models.nmtf)):
         if seg is not None and seg.pooled_segments:
             print(f"  {name}: segments pooled (n < {n_min}): {seg.pooled_segments}")
@@ -90,8 +90,11 @@ def train(
     report.info = {"extraction": counters.as_dict(), "person_types": dict(ptypes),
                    "unmapped": {f"{a}|{e}": n for (a, e), n in unmapped.items()}, "nm_caps": caps,
                    "n_train": len(records), "n_holdout": len(hold_records),
-                   "nm_alternatives": len(models.nm_vectors), "nm_persons_mapped": models.nm_mapped,
-                   "trip_purpose_lookup": models.trip_purpose.as_dict()}
+                   "nm_alternatives": len(models.nm_vectors), "nm_persons_extended": models.nm_mapped,
+                   "nm_extension_lookup": models.nm_extension.as_dict(),
+                   "tod_coefficients": {g: t.coef_table() for g, t in models.tod.items() if t is not None},
+                   "trip_purpose_lookup": models.trip_purpose.as_dict(),
+                   "trip_departure_tours_skipped": models.departure_records_skipped}
 
     timing = "independent" if independent_timing else "tod"
     chain = AsimChain(models, timing=timing, consistency=consistency, max_resample=max_resample)
@@ -107,7 +110,7 @@ def train(
 
     config = {"timing": timing, "consistency": consistency, "max_resample": max_resample,
               "time_resolution": time_resolution, "segmentation": segmentation, "n_min": n_min,
-              "min_support": min_support, "home_inter": models.home_inter, "calibrate": calibrate,
+              "home_inter": models.home_inter, "calibrate": calibrate,
               "calib_iters": calib_iters, "calib_sample": calib_sample, "holdout_fraction": holdout_fraction,
               "split_seed": split_seed, "seed": seed}
     path, val_path = output_paths(output_dir, VARIANT)
@@ -125,15 +128,11 @@ def train(
 @click.option("--segmentation/--no-segmentation", default=True, show_default=True,
               help="AB-5: person-type segment-specific coefficients")
 @click.option("--n-min", default=200, show_default=True, type=int, help="Minimum segment size before pooling")
-@click.option("--min-support", default=30, show_default=True, type=int,
-              help="Support threshold for non-mandatory frequency alternatives")
 def main(attributes, schedules, output_dir, seed, holdout_fraction, split_seed, calibrate, calib_iters,
-         calib_sample, independent_timing, consistency, max_resample, time_resolution, segmentation, n_min,
-         min_support) -> None:
+         calib_sample, independent_timing, consistency, max_resample, time_resolution, segmentation, n_min) -> None:
     make_rng(seed)
     train(attributes, schedules, output_dir, seed, holdout_fraction, split_seed, calibrate, calib_iters,
-          calib_sample, independent_timing, consistency, max_resample, int(time_resolution), segmentation,
-          n_min, min_support)
+          calib_sample, independent_timing, consistency, max_resample, int(time_resolution), segmentation, n_min)
 
 
 if __name__ == "__main__":

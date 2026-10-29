@@ -4,9 +4,8 @@ import numpy as np
 import statsmodels.api as sm
 from statsmodels.discrete.discrete_model import MNLogit
 
-from composhed.data import LABEL_COLS, encode_features
+from composhed.data import DISC_TYPES, LABEL_COLS, encode_features
 
-DISC_TYPES = ["escort", "medical", "other", "shop", "visit"]  # sorted → stable indices
 
 
 class ActivityTypeModel:

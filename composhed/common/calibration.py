@@ -1,6 +1,7 @@
 """SR-15/16/17: one shared calibration routine for choice constants and duration locations.
 
-Calibration follows ActivitySim practice: simulate the full model chain on (a
+Calibration follows agency practice for ActivitySim-family models (ActivitySim
+itself has no built-in calibration): simulate the full model chain on (a
 sample of) training persons, compare simulated outcomes with targets computed
 from the training data, and adjust constants by a damped log-ratio step
 

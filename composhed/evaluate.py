@@ -8,8 +8,16 @@ from acteval import Evaluator
 from composhed.data import LABEL_COLS
 
 
+def _read_table(path: str) -> pd.DataFrame:
+    if str(path).endswith(".parquet"):
+        import polars as pl  # pyarrow is not a dependency, so go through polars
+
+        return pd.DataFrame(pl.read_parquet(path).to_dict(as_series=False))
+    return pd.read_csv(path, low_memory=False)
+
+
 def _load_schedules(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path)
+    df = _read_table(path)
     if "hid" in df.columns:
         df = df.drop(columns=["hid"])
     if "duration" not in df.columns:
@@ -23,7 +31,7 @@ def _load_attributes(path: str) -> pd.DataFrame:
     Uses LABEL_COLS when the file has them; otherwise keeps every non-index column
     so that older attribute layouts still load.
     """
-    df = pd.read_csv(path, low_memory=False)
+    df = _read_table(path)
     df = df.drop(columns=[c for c in df.columns if c.startswith("Unnamed")])
     cols = LABEL_COLS if all(c in df.columns for c in LABEL_COLS) else [c for c in df.columns if c != "pid"]
     df[cols] = df[cols].astype("string").fillna("unknown").astype(str)

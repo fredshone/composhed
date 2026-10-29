@@ -33,7 +33,7 @@ uv run composhed-generate-mdcev --attributes A.csv --models models/mdcev_models.
 
 | Option | Default | Effect |
 |---|---|---|
-| `--max-records` | all | Estimate the MDCEV model on a random sample of this many people. **Needed on the full NTS data**: estimating on all 56,734 people runs out of memory (Biogeme tries to allocate about 170–185 GB for the Hessian). The stability study uses 5,000. Only the MDCEV model is subsampled; the episode and timing models use everyone. |
+| `--max-records` | all | Estimate the MDCEV model on a random sample of this many people. **Needed on the full NTS data**: estimating on all 91,706 person-days runs out of memory (Biogeme tries to allocate about 170–185 GB for the Hessian). The stability study uses 5,000. Only the MDCEV model is subsampled; the episode and timing models use everyone. |
 | `--fix-gamma / --free-gamma` | fixed | Fix each type's satiation parameter γ to its mean duration when done, or estimate γ freely. Free estimation tends to find degenerate solutions on this data. |
 | `--calibrate / --no-calibrate` | on | Adjust the constants after estimation to match participation rates (see below). |
 | `--cap-percentile` | 90 | How many episodes of each type the timing model enumerates, as a percentile of the observed counts. |
@@ -42,7 +42,7 @@ uv run composhed-generate-mdcev --attributes A.csv --models models/mdcev_models.
 
 Five person attributes: `age`, `hh_income`, `sex`, `employment` and `day`,
 one-hot encoded with the first category dropped. The spatial and car-access
-attributes (`hh_zone`, `access_egress_distance`, `vehicles`) are left out. They
+attributes (`hh_zone`, `access_egress_distance`, `veh_per_adult`) are left out. They
 matter more for location and mode choice than for how time is split.
 
 ## Components

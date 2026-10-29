@@ -1,19 +1,28 @@
-"""ActivitySim-aligned generation chain (ASIM-1 … ASIM-11)."""
+"""ActivitySim-aligned generation chain (ASIM-1 … ASIM-11).
+
+Order as ActivitySim's pipeline: CDAP → mandatory tour frequency → mandatory
+tour scheduling → non-mandatory tour frequency (seeing the residual time window)
+and its extension → non-mandatory tour scheduling → stop frequency → trip
+purpose → trip scheduling. Trip departures are chosen as periods; the minute is
+drawn uniformly from the feasible minutes of the period.
+"""
 
 from collections import Counter
 
 import numpy as np
 
-from composhed.activitysim.data import NM_ORDER, NTS_ACT, mtf_tours, nm_tours
+from composhed.activitysim.data import NM_ORDER, NTS_ACT, WORKER_TYPES, mtf_tours
 from composhed.activitysim.models import (
     GROUPS,
     STOP_ACTS,
     AsimModels,
+    hour_band,
+    residual_window,
     tod_group,
     tour_class,
+    tour_contexts,
     x_nmtf,
     x_stopfreq,
-    z_tod,
 )
 from composhed.activitysim.persontype import person_type
 from composhed.common.calibration import share_dict
@@ -30,6 +39,19 @@ class AsimChain:
         self.consistency = consistency
         self.max_resample = max_resample
 
+    def _plan(self, purposes: list[str], attrs: dict, ptype: str, mtf, n_mand: int, nm: list[str]) -> list[PlannedTour]:
+        """Tours of one scheduling phase, numbered within the phase (first of 2+, look-ahead)."""
+        m = self.m
+        purposes = [p for p in purposes if m.tod.get(tod_group(p)) is not None]
+        return [PlannedTour(p, tod_group(p), m.z(tod_group(p), attrs, ptype, p, ctx),
+                            n_remaining=ctx["n_in_phase"] - ctx["idx"] - 1)
+                for p, ctx in zip(purposes, tour_contexts(purposes, mtf, n_mand, nm))]
+
+    def _place(self, tours, xl, rng, report, prior=()) -> list[PlannedTour]:
+        m = self.m
+        return place_tours(tours, m.tod, m.indep, xl, rng, report, m.home_inter, self.timing,
+                           self.consistency, self.max_resample, prior=prior)
+
     def generate(self, xl: np.ndarray, attrs: dict, rng: np.random.Generator,
                  report: GenerationReport) -> tuple[list[dict], dict]:
         m = self.m
@@ -42,33 +64,32 @@ class AsimChain:
         mand: list[str] = []
         if cdap == "M" and m.mtf is not None:
             trace["mtf"] = m.mtf.sample(x1, [ptype], rng)[0]
-            mand = mtf_tours(trace["mtf"])
-        nm: list[str] = []
+            mand = mtf_tours(trace["mtf"], ptype in WORKER_TYPES)
+        placed = self._place(self._plan(mand, attrs, ptype, trace["mtf"], len(mand), []), xl, rng, report)
         if m.nmtf is not None:
+            window = residual_window([(int(t.start), int(t.end)) for t in placed], m.home_inter)
             avail = m._nm_avail([cdap])
-            label = m.nmtf.sample(x_nmtf(xl, cdap, len(mand))[None, :], [ptype], rng, avail)[0]
+            label = m.nmtf.sample(x_nmtf(xl, cdap, len(mand), window)[None, :], [ptype], rng, avail)[0]
             trace["nm"] = label
-            nm = nm_tours(m.nm_vectors[label])
-        purposes = mand + sorted(nm, key=NM_ORDER.index)
-        seen: Counter = Counter()
-        tours = []
-        for p in purposes:
-            if m.tod.get(tod_group(p)) is None:
-                continue
-            tours.append(PlannedTour(p, tod_group(p), z_tod(xl, ptype, p, seen[p], m.segmented)))
-            seen[p] += 1
-        placed = place_tours(tours, m.tod, m.indep, xl, rng, report, m.home_inter, self.timing,
-                             self.consistency, self.max_resample)
+            nm = []
+            for p, n in zip(NM_ORDER, m.nm_vectors[label]):
+                if n:
+                    pr = m.nm_extension.probs((p, cdap == "M", ptype))
+                    n += int(rng.choice(len(pr), p=pr / pr.sum()))
+                nm += [p] * n
+            placed = self._place(self._plan(nm, attrs, ptype, trace["mtf"], len(mand), nm), xl, rng, report,
+                                 prior=placed)
+        counts = Counter(t.purpose for t in placed)
         for t in placed:
-            self._stops(xl, t, rng, report, trace)
+            self._stops(xl, ptype, t, counts, rng, report, trace)
             trace["tours"].append((t.group, t.start, t.end))
         for t in placed:
             t.purpose = NTS_ACT[t.purpose]
         return tours_to_rows(placed, report), trace
 
-    def _stops(self, xl, t: PlannedTour, rng, report, trace) -> None:
+    def _stops(self, xl, ptype, t: PlannedTour, counts, rng, report, trace) -> None:
         m = self.m
-        alt = m.stopfreq.sample(x_stopfreq(xl, t.start, t.end)[None, :], [t.purpose], rng)[0] \
+        alt = m.stopfreq.sample(x_stopfreq(xl, t.start, t.end, counts)[None, :], [t.purpose], rng)[0] \
             if m.stopfreq is not None else "0out_0in"
         trace["stop_alts"].append((t.purpose, alt))
         n_out, n_in = int(alt[0]), int(alt.split("_")[1][0])
@@ -81,46 +102,74 @@ class AsimChain:
             report.stops_dropped += 1
         S, E = float(t.start), float(t.end)
         cls = tour_class(t.purpose)
-        # Outbound: departure from each stop; stop k occupies [d_{k-1}, d_k), d_0 = tour start.
+        a_out, a_in = int(m.grid.period_of(S)), int(m.grid.end_period_of(E))
+        # Outbound, forwards from the tour start: departure from each stop; stop k occupies [d_{k-1}, d_k).
         deps, cursor = [], S
         for k in range(n_out):
             hi = E - (n_out - k - 1) - n_in - 1  # leave >= 1 min per later stop and the primary activity
-            cursor = self._departure(cls, "outbound", k, cursor + 1, hi, rng)
+            key = ("outbound", cls, a_out, t.purpose, min(k, 2))
+            cursor = self._departure(key, cursor + 1, hi, rng, report)
             deps.append(cursor)
-        prev = S
+        primary = NTS_ACT[t.purpose]
+        prev, prev_act = S, None
         for k, d in enumerate(deps):
-            act = self._purpose(t.purpose, "outbound", k, rng)
+            avoid = {prev_act} | ({primary} if k == n_out - 1 else set())
+            act = self._purpose(t.purpose, "outbound", S, ptype, avoid, rng)
             t.outbound.append((act, d - prev))
-            prev = d
-        # Inbound: departure from the primary activity and from each inbound stop but the last.
-        in_deps, cursor = [], prev
-        for k in range(n_in):
-            hi = E - (n_in - k)
-            cursor = self._departure(cls, "inbound", k, cursor + 1, hi, rng)
-            in_deps.append(cursor)
+            prev, prev_act = d, act
+        # Inbound, backwards from the tour end: departures from the primary and from each stop but the last.
+        in_deps, cursor = [0.0] * n_in, E
+        for b in range(n_in):
+            k = n_in - 1 - b
+            lo = prev + 1 + k  # leave >= 1 min for the primary and each earlier inbound stop
+            key = ("inbound", cls, a_in, t.purpose, min(b, 2))
+            cursor = self._departure(key, lo, cursor - 1, rng, report)
+            in_deps[k] = cursor
         bounds = in_deps + [E]
+        prev_act = primary
         for k in range(n_in):
-            act = self._purpose(t.purpose, "inbound", k, rng)
+            act = self._purpose(t.purpose, "inbound", E, ptype, {prev_act}, rng)
             t.inbound.append((act, bounds[k + 1] - bounds[k]))
+            prev_act = act
 
-    def _purpose(self, tour_purpose, direction, k, rng) -> str:
-        p = self.m.trip_purpose.probs((tour_purpose, direction, min(k, 2)))
-        return STOP_ACTS[int(rng.choice(len(STOP_ACTS), p=p))]
+    def _purpose(self, tour_purpose, direction, anchor, ptype, avoid: set, rng) -> str:
+        """ASIM-8: stop purpose from the lookup, excluding the purpose of the adjacent activity.
 
-    def _departure(self, cls, direction, k, lo: float, hi: float, rng) -> float:
-        """ASIM-9: departure period from the lookup, restricted to [lo, hi]; minute within period."""
+        Two adjacent episodes of one purpose would be merged into one in the
+        location-free schedule output, silently removing the stop.
+        """
+        p = self.m.trip_purpose.probs((tour_purpose, direction, hour_band(anchor), ptype)).copy()
+        ok = np.array([a not in avoid for a in STOP_ACTS])
+        p = np.where(ok, p, 0.0)
+        if p.sum() <= 0:
+            p = ok.astype(float)
+        return STOP_ACTS[int(rng.choice(len(STOP_ACTS), p=p / p.sum()))]
+
+    def _departure(self, key: tuple, lo: float, hi: float, rng, report) -> float:
+        """ASIM-9: departure period from the lookup, restricted to [lo, hi]; uniform minute within the period.
+
+        Probability outside the feasible periods is removed and the rest renormalised,
+        which is ActivitySim's fail-and-retry with unlimited retries; when no feasible
+        period has probability, the period nearest the anchor is used (as
+        ``choose_most_initial``) and counted.
+        """
         grid = self.m.grid
         lo_i, hi_i = int(np.ceil(lo)), int(np.floor(hi))
         if hi_i <= lo_i:
             return float(lo_i)
-        p = self.m.trip_departure.probs((cls, direction, min(k, 2))).copy()
+        p = self.m.trip_departure.probs(key).copy()
         first, last = int(grid.end_period_of(lo_i)), int(grid.end_period_of(hi_i))
         p[:first] = 0.0
         p[last + 1:] = 0.0
         if p.sum() <= 0:
-            p[first:last + 1] = 1.0
-        period = int(rng.choice(len(p), p=p / p.sum()))
-        return float(self.m.trip_intra.sample(direction, period, lo_i - 1, hi_i, rng, end=True))
+            report.count("trip_departure_failfix")
+            period = first if key[0] == "outbound" else last
+        else:
+            period = int(rng.choice(len(p), p=p / p.sum()))
+        # Departure minutes of a period are (lo, hi] (end convention), here restricted to [lo_i, hi_i].
+        a = max(lo_i, int(grid.lo(period)) + 1)
+        b = min(hi_i, int(grid.hi(period)))
+        return float(rng.integers(a, b + 1))
 
 
 # ---- calibration statistics ------------------------------------------------------------------------

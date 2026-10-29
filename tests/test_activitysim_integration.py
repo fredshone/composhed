@@ -11,7 +11,7 @@ from composhed.activitysim.train import train
 from tests.variant_helpers import run_variant
 
 # The 52-person fixture is far below the NTS-scale support thresholds.
-DEFAULTS = {"min_support": 1, "n_min": 10}
+DEFAULTS = {"n_min": 10}
 
 
 def test_train_generate_invariants_and_determinism(tmp_path):

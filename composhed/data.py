@@ -3,24 +3,32 @@
 import numpy as np
 import polars as pl
 
-LABEL_COLS = ["age", "hh_income", "sex", "employment", "day", "hh_zone", "access_egress_distance", "vehicles"]
+LABEL_COLS = ["age", "hh_income", "sex", "employment", "day", "hh_zone", "access_egress_distance", "veh_per_adult"]
 # Reduced feature set for MDCEV: drop spatial/mode-choice features irrelevant to time allocation
 MDCEV_LABEL_COLS = ["age", "hh_income", "sex", "employment", "day"]
 MANDATORY_ACTS = {"work", "education"}
-DISC_ACTS = {"shop", "visit", "escort", "medical", "other"}
-ACTIVITY_TYPES = ["home", "work", "education", "shop", "visit", "escort", "medical", "other"]
+DISC_ACTS = {"shop", "visit", "escort", "leisure", "other"}
+DISC_TYPES = sorted(DISC_ACTS)  # stable order for per-type models and dummies
+ACTIVITY_TYPES = ["home", "work", "education", "shop", "visit", "escort", "leisure", "other"]
+
+
+def _read_table(path: str, schema_overrides: dict | None = None) -> pl.DataFrame:
+    if str(path).endswith(".parquet"):
+        df = pl.read_parquet(path)
+        return df.with_columns([pl.col(c).cast(t) for c, t in (schema_overrides or {}).items() if c in df.columns])
+    return pl.read_csv(path, schema_overrides=schema_overrides, infer_schema_length=10000)
 
 
 def load_attributes(path: str) -> pl.DataFrame:
     schema_overrides = {c: pl.Utf8 for c in LABEL_COLS}
-    df = pl.read_csv(path, schema_overrides=schema_overrides)
+    df = _read_table(path, schema_overrides)
     df = df.with_columns([pl.col(c).fill_null("unknown") for c in LABEL_COLS])
     return df.select(["pid"] + LABEL_COLS)
 
 
 def load_schedules(path: str) -> pl.DataFrame:
-    df = pl.read_csv(path)
-    for col in ("hid", "zone", "seq"):
+    df = _read_table(path)
+    for col in ("hid", "zone", "seq", "location"):
         if col in df.columns:
             df = df.drop(col)
     if "duration" not in df.columns:
@@ -247,27 +255,40 @@ def build_training_dataset(
     return records, disc_slot_records
 
 
+def _dummies(df: pl.DataFrame, label_cols: list[str], feature_names: list[str] | None) -> pl.DataFrame:
+    """One-hot encode label_cols, dropping the sorted-first level of each as reference.
+
+    polars ``to_dummies(drop_first=True)`` drops the first level *seen*, which
+    depends on row order, so training and generation could disagree on the
+    reference. Here every level is encoded and the reference is chosen by
+    sorting; with ``feature_names`` the columns are aligned to them instead
+    (missing → 0, extras dropped).
+    """
+    df = df.select(label_cols).with_columns([pl.col(c).cast(pl.Utf8) for c in label_cols])
+    enc = df.to_dummies(columns=label_cols)
+    if feature_names is None:
+        feature_names = []
+        for c in label_cols:
+            levels = sorted(df[c].unique().to_list())
+            feature_names += [f"{c}_{v}" for v in levels[1:]]
+    missing = [c for c in feature_names if c not in enc.columns]
+    if missing:
+        enc = enc.with_columns([pl.lit(0).alias(c) for c in missing])
+    return enc.select(feature_names)
+
+
 def encode_features(
     records: list[dict],
     label_cols: list[str] = LABEL_COLS,
     feature_names: list[str] | None = None,
 ) -> tuple[np.ndarray, list[str]]:
-    """One-hot encode label columns from a list of record dicts.
+    """One-hot encode label columns from a list of record dicts (reference = sorted-first level).
 
     Returns (X, feature_names) where X is float64 numpy array.
     """
     rows = [{k: str(r[k]) for k in label_cols} for r in records]
-    df = pl.DataFrame(rows)
-    df_enc = df.to_dummies(columns=label_cols, drop_first=True)
-    if feature_names is not None:
-        # Align to stored feature names (add missing=0, drop extras)
-        for col in feature_names:
-            if col not in df_enc.columns:
-                df_enc = df_enc.with_columns(pl.lit(0).alias(col))
-        df_enc = df_enc.select(feature_names)
-    cols = df_enc.columns
-    X = df_enc.to_numpy(allow_copy=True).astype(np.float64)
-    return X, cols
+    df_enc = _dummies(pl.DataFrame(rows), label_cols, feature_names)
+    return df_enc.to_numpy(allow_copy=True).astype(np.float64), df_enc.columns
 
 
 def encode_for_generation(
@@ -276,15 +297,7 @@ def encode_for_generation(
     feature_names: list[str],
 ) -> np.ndarray:
     """Encode attributes DataFrame to aligned numpy feature matrix."""
-    df = attr_df.select(label_cols).with_columns(
-        [pl.col(c).cast(pl.Utf8) for c in label_cols]
-    )
-    df_enc = df.to_dummies(columns=label_cols, drop_first=True)
-    for col in feature_names:
-        if col not in df_enc.columns:
-            df_enc = df_enc.with_columns(pl.lit(0).alias(col))
-    df_enc = df_enc.select(feature_names)
-    return df_enc.to_numpy(allow_copy=True).astype(np.float64)
+    return _dummies(attr_df, label_cols, feature_names).to_numpy(allow_copy=True).astype(np.float64)
 
 
 def compute_mean_home_times(records: list[dict]) -> dict[str, float]:

@@ -44,6 +44,10 @@ Sometimes a tour contains several work or education episodes, as in
   are no tours from work.
 
 NTS 2023 has 275 such tours (one each for 275 people) and 11 tours that mix work and education.
+In 47 of them a stop inside the block ends before the block's (combined) end,
+so the trip departures are out of order. The ActivitySim variant leaves these
+47 tours out of its trip departure table (counted in `validation.json` under
+`info.trip_departure_tours_skipped`).
 Every training run logs these counts and stores them in `validation.json` under
 `info.extraction`.
 
@@ -55,20 +59,24 @@ three or more. The variants treat them differently:
 | Variant | Rule |
 |---|---|
 | CEMDAP | One mandatory activity per day, as in the compositional baseline. Later work / school time is added to the first block. Later tours' stops become a separate non-mandatory tour after it, with the longest stop as its main activity. A later tour with no stops disappears, and the home stays either side of it are joined. (421 tours are folded in this way.) |
-| DaySim, ActivitySim | Kept as second (and third) work or school tours, because both frameworks include these in their choices. |
+| DaySim | Kept as second (and third) work or school tours, because DaySim includes these in its choices. |
+| ActivitySim | Kept as second work or school tours (ActivitySim's work2 / school2). The 14 days with three or more keep the earliest two of each type; the rest are dropped from the record (logged), so every model is estimated on tours the frequency models can generate. On work_and_school days, non-workers' school tour is scheduled first, as in ActivitySim. |
 
 ## Caps
 
-To keep choice sets manageable, some counts are capped. A capped item is only
-removed from the *count* model; the activities themselves still train the
-type, duration and timing models.
+To keep choice sets manageable, some counts are capped. For CEMDAP and DaySim
+a capped item is only removed from the *count* model; the activities
+themselves still train the type, duration and timing models. The ActivitySim
+variant drops tours beyond its caps from the training record altogether
+(latest first; 129 tours on NTS 2023), so its scheduling models never see
+tours its frequency models cannot produce.
 
 | What is counted | Cap | Share of NTS within the cap |
 |---|---|---|
 | Stops per half-tour (DaySim, ActivitySim) | 3 | 99.92% of half-tours |
 | Stops or tours per CEMDAP position | 3 | 99.98% |
 | Non-mandatory tours per day | 4 | 99.84% of days |
-| Work or education tours of one type (DaySim) | 2 | 99.93% |
+| Work or education tours of one type (DaySim, ActivitySim) | 2 | 99.93% |
 | Stops per CEMDAP non-mandatory tour | 4 | 99.59% of tours |
 
 ## Travel time and the 10-minute home stay
