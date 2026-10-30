@@ -20,7 +20,7 @@
   interacted with person features, with the ``MNL`` interface.
 
 Every model carries an ``offset`` vector over alternatives added to utilities
-(log-probabilities for the ordered logit); the calibration stage adjusts it.
+(log-probabilities for the ordered logit).
 """
 
 
@@ -287,7 +287,7 @@ class OrderedLogit:
         pred = cats[P.argmax(axis=1)] if len(y) else np.array([])
         exp_count = P @ cats if len(y) else np.array([])
         return {
-            "n": int(len(y)),
+            "n": len(y),
             "accuracy": float((pred == y).mean()) if len(y) else float("nan"),
             "prsquared": self.prsquared,
             "mae": float(np.mean(np.abs(exp_count - y))) if len(y) else float("nan"),
@@ -445,7 +445,7 @@ class ConditionalLogit:
         ll = float(np.sum(np.log(np.maximum(P[np.arange(len(y)), y], 1e-300))))
         ll0 = -float(np.sum(np.log(avail.sum(axis=1)))) if avail is not None else -len(y) * np.log(self.J)
         return {
-            "n": int(len(y)),
+            "n": len(y),
             "accuracy": float((P.argmax(axis=1) == y).mean()) if len(y) else float("nan"),
             "prsquared": 1.0 - ll / ll0 if ll0 < 0 else float("nan"),
         }
@@ -459,14 +459,17 @@ class AltAttrMNL:
     (``inter_attrs``; default the same table) an interaction with each person
     feature, as an ActivitySim ``interaction_simulate`` spec or a DaySim utility
     function does. The parameter count is ``n_attrs + K · n_inter`` instead of the
-    ``(K + 1) · (J − 1)`` of an alternative-specific MNL. ``offset`` is alternative-specific, so calibration can still move every share.
+    ``(K + 1) · (J − 1)`` of an alternative-specific MNL; ``b_mask`` (K × n_inter) restricts which person
+    features act on which interaction attribute, as a DaySim utility function does.
     Same interface as ``MNL`` (``classes_``, ``offset``, ``fit`` / ``predict_proba`` /
     ``sample`` / ``validate``).
     """
 
     def __init__(self, attrs: dict, attr_names: list[str], l2: float = 1e-4, maxiter: int = 500,
-                 inter_attrs: dict | None = None, inter_names: list[str] | None = None) -> None:
+                 inter_attrs: dict | None = None, inter_names: list[str] | None = None,
+                 b_mask: np.ndarray | None = None) -> None:
         self.attrs = {k: np.asarray(v, dtype=float) for k, v in attrs.items()}
+        self.b_mask = b_mask
         self.attr_names = list(attr_names)
         self.inter_attrs = None if inter_attrs is None else {k: np.asarray(v, dtype=float) for k, v in inter_attrs.items()}
         self.inter_names = list(inter_names) if inter_names is not None else self.attr_names
@@ -488,7 +491,9 @@ class AltAttrMNL:
         A = np.array([self.attrs[c] for c in self.classes_])
         inter = getattr(self, "inter_attrs", None)
         C = A if inter is None else np.array([inter[c] for c in self.classes_])
-        self.clogit_ = ConditionalLogit(A, C, alt_names=self.classes_, l2=self.l2, maxiter=self.maxiter)
+        b_mask = getattr(self, "b_mask", None)
+        self.clogit_ = ConditionalLogit(A, C, alt_names=self.classes_, l2=self.l2, maxiter=self.maxiter,
+                                        b_mask=b_mask)
         X = np.asarray(X, dtype=float)
         self.feature_names_ = list(feature_names or [f"x{i}" for i in range(X.shape[1])])
         yi = np.array([self.classes_.index(v) for v in y], dtype=int)
@@ -499,7 +504,7 @@ class AltAttrMNL:
         p0 = np.maximum(self.train_shares_, 1e-12)
         self.llnull_ = float(np.sum(counts * np.log(p0)))
         self.converged_ = self.clogit_.converged_
-        self.n_params_ = A.shape[1] + C.shape[1] * X.shape[1]
+        self.n_params_ = A.shape[1] + (int(np.sum(b_mask)) if b_mask is not None else C.shape[1] * X.shape[1])
         return self
 
     @property

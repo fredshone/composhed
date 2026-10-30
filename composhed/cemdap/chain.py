@@ -15,10 +15,13 @@ and any overflowing side of the day is rescaled proportionally, as CompoShed doe
 
 import numpy as np
 
-from composhed.cemdap.data import DAY, MAND_START_ORIGIN, MAX_NM_TOURS, MAX_POSITION_COUNT
+from composhed.cemdap.data import (
+    DAY,
+    MAND_START_ORIGIN,
+    MAX_NM_TOURS,
+    MAX_POSITION_COUNT,
+)
 from composhed.cemdap.models import (
-    COUNT_POSITIONS,
-    PURPOSES,
     CemdapModels,
     x_counts,
     x_duration,
@@ -217,56 +220,3 @@ class CemdapChain:
                 seq.append(("home", h * scale))
         seq.append(("home", DAY - home0 - sum(items) * scale))
         return seq
-
-
-# ---- calibration statistics (same function for observed records and simulated traces) -----------
-def record_trace(rec) -> dict:
-    tr = {"mand": None, "stops": [(s["purpose"], s["duration"]) for s in rec.stops],
-          "tour_sizes": [n for _, _, n in rec.tour_sizes], "home_stays": [h["duration"] for h in rec.home_stays],
-          "counts": {}}
-    if rec.mand_type is not None:
-        tr["mand"] = (rec.mand_type, rec.mand_start, rec.mand_duration)
-        tr["counts"] = {k: getattr(rec, k) for k in COUNT_POSITIONS}
-    else:
-        tr["nm_tours"] = rec.n_nm_tours
-        if rec.first_departure is not None:
-            tr["first_departure"] = rec.first_departure
-    return tr
-
-
-def trace_stats(traces: list[dict], independent_timing: bool = False) -> dict[str, dict]:
-    from composhed.common.calibration import share_dict
-
-    out: dict[str, dict] = {}
-    mand = [t["mand"] for t in traces]
-    out["work_participation"] = share_dict([int(m is not None and m[0] == "work") for m in mand], [0, 1])
-    non_work = [m for m in mand if m is None or m[0] != "work"]
-    out["education_participation"] = share_dict([int(m is not None) for m in non_work], [0, 1])
-    m_tr = [t for t in traces if t["mand"] is not None]
-    for k in COUNT_POSITIONS:
-        out[f"stops_{k[2:]}"] = share_dict([min(t["counts"].get(k, 0), MAX_POSITION_COUNT) for t in m_tr],
-                                           range(MAX_POSITION_COUNT + 1))
-    nm = [t for t in traces if t["mand"] is None]
-    out["nm_tours"] = share_dict([min(t.get("nm_tours", 0), MAX_NM_TOURS) for t in nm], range(MAX_NM_TOURS + 1))
-    out["tour_size"] = share_dict([min(n, 4) for t in traces for n in t["tour_sizes"]], range(1, 5))
-    stops = [s for t in traces for s in t["stops"]]
-    out["stop_purpose"] = share_dict([p for p, _ in stops], PURPOSES)
-    if m_tr:
-        starts = np.array([t["mand"][1] - MAND_START_ORIGIN for t in m_tr], dtype=float)
-        durs = np.array([t["mand"][2] for t in m_tr], dtype=float)
-        out["mand_duration_mean"] = {"mean": float(durs.mean())}
-        out["mand_duration_spread"] = {"mean": float(np.subtract(*np.percentile(durs, [90, 10])))}
-        if not independent_timing:
-            out["mand_start_mean"] = {"mean": float(starts.mean())}
-            out["mand_start_spread"] = {"mean": float(np.subtract(*np.percentile(starts, [90, 10])))}
-    for p in PURPOSES:
-        d = [x for q, x in stops if q == p]
-        if d:
-            out[f"stop_duration_{p}"] = {"mean": float(np.mean(d))}
-    homes = [h for t in traces for h in t["home_stays"]]
-    if homes:
-        out["home_stay_mean"] = {"mean": float(np.mean(homes))}
-    fd = [t["first_departure"] for t in traces if t.get("first_departure") is not None]
-    if fd:
-        out["first_departure_mean"] = {"mean": float(np.mean(fd))}
-    return out

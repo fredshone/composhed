@@ -3,7 +3,7 @@
 import numpy as np
 import polars as pl
 
-LABEL_COLS = ["age", "hh_income", "sex", "employment", "day", "hh_zone", "access_egress_distance", "veh_per_adult"]
+LABEL_COLS = ["age", "hh_income", "sex", "employment", "day", "hh_zone", "wt_travel_time_to_cities", "veh_per_adult"]
 # Reduced feature set for MDCEV: drop spatial/mode-choice features irrelevant to time allocation
 MDCEV_LABEL_COLS = ["age", "hh_income", "sex", "employment", "day"]
 MANDATORY_ACTS = {"work", "education"}

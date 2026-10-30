@@ -6,7 +6,7 @@ schedules, and asserts the hard schedule invariants:
   1. sum(duration) == 1440  (24-hour budget)
   2. First activity == "home"
   3. Last activity == "home"
-  4. No two consecutive activities have the same type
+Neighbouring activities of one type are allowed (they are not merged).
 """
 
 import csv
@@ -20,7 +20,7 @@ from composhed.train import train
 
 ATTR_FIELDNAMES = [
     "pid", "age", "hh_income", "sex", "employment",
-    "day", "hh_zone", "access_egress_distance", "veh_per_adult",
+    "day", "hh_zone", "wt_travel_time_to_cities", "veh_per_adult",
 ]
 SCHED_FIELDNAMES = ["pid", "act", "start", "end", "duration"]
 
@@ -49,7 +49,7 @@ def _make_synthetic_data():
     def add(pid, age, hh_income, sex, employment, day, hh_zone, dist, veh_per_adult, activities):
         attr_rows.append(dict(
             pid=pid, age=age, hh_income=hh_income, sex=sex, employment=employment,
-            day=day, hh_zone=hh_zone, access_egress_distance=dist, veh_per_adult=veh_per_adult,
+            day=day, hh_zone=hh_zone, wt_travel_time_to_cities=dist, veh_per_adult=veh_per_adult,
         ))
         for act, start, end, dur in activities:
             sched_rows.append(dict(pid=pid, act=act, start=start, end=end, duration=dur))
@@ -271,7 +271,3 @@ def test_train_generate_pipeline(tmp_path):
         assert acts[0] == "home", f"pid={pid}: first act={acts[0]!r}"
         assert acts[-1] == "home", f"pid={pid}: last act={acts[-1]!r}"
 
-        for j in range(len(acts) - 1):
-            assert acts[j] != acts[j + 1], (
-                f"pid={pid}: consecutive '{acts[j]}' at positions {j},{j+1}"
-            )

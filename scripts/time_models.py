@@ -14,7 +14,7 @@ Writes ``<out-dir>/timings.csv`` (one row per variant × ablation × seed × sta
 appended across invocations) and ``<out-dir>/machine.json``. No evaluation is run.
 
     uv run python scripts/time_models.py --attributes A.parquet --schedules S.parquet \\
-        --variants compositional,mdcev,cemdap,daysim,activitysim --no-calibrate
+        --variants compositional,mdcev,cemdap,daysim,activitysim
 """
 
 import json
@@ -30,7 +30,6 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from run_stability import (
-    ABLATION_VARIANTS,
     ABLATIONS,
     ALL_VARIANTS,
     _generate_cmd,
@@ -67,14 +66,13 @@ def _timed(cmd: list[str], log_path: Path, env: dict) -> dict:
 @click.option("--out-dir", default="timing_runs", show_default=True)
 @click.option("--variants", default=",".join(ALL_VARIANTS), show_default=True)
 @click.option("--ablations", default="", show_default=True, help="<variant>:<preset>, as in run_stability.py")
-@click.option("--calibrate/--no-calibrate", default=True, show_default=True)
 @click.option("--mdcev-max-records", default=None, type=int)
 @click.option("--threads", default=1, show_default=True, type=int,
               help="BLAS/OpenMP threads per process (the stability runs use 1)")
 @click.option("--max-load", default=1.0, show_default=True, type=float,
               help="Warn when the 1-minute load average is above this before a stage")
 @click.option("--generate/--no-generate", default=True, show_default=True, help="Also time generation")
-def main(attributes, schedules, seeds, out_dir, variants, ablations, calibrate, mdcev_max_records, threads,
+def main(attributes, schedules, seeds, out_dir, variants, ablations, mdcev_max_records, threads,
          max_load, generate) -> None:
     runs = _parse_runs(variants, ablations, False, False)
     base = Path(out_dir)
@@ -91,8 +89,6 @@ def main(attributes, schedules, seeds, out_dir, variants, ablations, calibrate, 
         for variant, ablation in runs:
             name = f"{variant}__{ablation}" if ablation else variant
             extra = ABLATIONS.get(ablation, [])
-            if not calibrate and variant in ABLATION_VARIANTS["no-calibrate"] and "--no-calibrate" not in extra:
-                extra = extra + ["--no-calibrate"]
             run_dir = base / name / f"seed_{seed}"
             models_dir = run_dir / "models"
             models_dir.mkdir(parents=True, exist_ok=True)

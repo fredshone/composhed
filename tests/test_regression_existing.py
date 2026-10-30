@@ -4,7 +4,8 @@ Trains and generates both existing variants on the synthetic fixture from
 ``test_integration`` with a fixed seed and compares SHA-256 hashes of the
 generated CSVs against values captured on 2026-10-29, after the fixture moved
 to the foundata NTS 2023 schema (leisure replaces medical, veh_per_adult
-replaces vehicles). The hashes are machine-specific (BLAS, optimiser builds); regenerate them with ``python -m tests.test_regression_existing``
+replaces vehicles); the compositional schedules hash was updated on
+2026-10-30 when merging of neighbouring same-type episodes was removed. The hashes are machine-specific (BLAS, optimiser builds); regenerate them with ``python -m tests.test_regression_existing``
 on a clean checkout if the environment changes.
 """
 
@@ -22,9 +23,9 @@ from tests.test_integration import (
 )
 
 GOLDEN = {
-    "compositional_attributes": "71401156662e7895f8525ca68627012f7585a0494b32efc70baf4ef31bb7e610",
-    "compositional_schedules": "37539506b9838840be181fca79e211c97f519a7059a7600d086bb6e48d48619b",
-    "mdcev_attributes": "71401156662e7895f8525ca68627012f7585a0494b32efc70baf4ef31bb7e610",
+    "compositional_attributes": "02eb8c5e639c95b96bc4452009481ea83d4131247743f605b26f741dfc3564d2",
+    "compositional_schedules": "3f9af1ad08fd98100c5a1f584deef49de89ba461b02fcf4f71f734cd4d0944f4",
+    "mdcev_attributes": "02eb8c5e639c95b96bc4452009481ea83d4131247743f605b26f741dfc3564d2",
     "mdcev_schedules": "77f38aa1fd6919a50dcbc818c3b55e9408fbe2ec82708466899bb1b1de75cec1",
 }
 
@@ -61,9 +62,7 @@ def _run(tmp: str) -> dict[str, str]:
     out["compositional_attributes"], out["compositional_schedules"] = _sha(a), _sha(s)
 
     _seed(0)
-    # calibrate=False: MDCEVModel.calibrate draws from an unseeded default_rng(),
-    # so a calibrated bundle is not reproducible even with a fixed seed.
-    train_mdcev(attr_path, sched_path, models, calibrate=False)
+    train_mdcev(attr_path, sched_path, models)
     _seed(0)
     a, s = os.path.join(tmp, "mdcev_a.csv"), os.path.join(tmp, "mdcev_s.csv")
     generate_mdcev(attr_path, os.path.join(models, "mdcev_models.pkl"), a, s)

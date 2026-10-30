@@ -50,14 +50,6 @@ def _print_mdcev_validation(metrics: dict, types: list[str], label: str = "") ->
         )
 
 
-def _print_calibration_offsets(offsets: dict[str, float], types: list[str]) -> None:
-    print("  ASC calibration offsets")
-    for atype in types:
-        v = offsets.get(atype, 0.0)
-        bar = ("+" if v >= 0 else "") + f"{v:+.3f}"
-        print(f"    {atype:<14}  {bar}")
-
-
 def _print_episode_validation(metrics: dict) -> None:
     print("  EpisodeCount — mean episodes per type (actual vs predicted)")
     hdr = f"    {'type':<14}  {'n':>6}  {'mean_act':>8}  {'mean_pred':>9}  {'mae':>6}"
@@ -75,7 +67,6 @@ def train(
     output_dir: str,
     max_records: int | None = None,
     cap_percentile: float = 90.0,
-    calibrate: bool = True,
     fix_gamma: bool = True,
 ) -> None:
     t0 = time.time()
@@ -122,7 +113,7 @@ def train(
     mdcev_model = MDCEVModel().fit(
         type_records, feature_names, types=ACTIVITY_TYPES, X=X_mdcev, fix_gamma=fix_gamma
     )
-    _print_mdcev_validation(mdcev_model.validate(type_records, X_mdcev), ACTIVITY_TYPES, label="pre-calibration")
+    _print_mdcev_validation(mdcev_model.validate(type_records, X_mdcev), ACTIVITY_TYPES, label="estimated")
     print("  Biogeme estimates (intercepts / gammas / scale)")
     print(f"    scale = {mdcev_model._scale:.4f}")
     hdr2 = f"    {'type':<14}  {'intercept':>10}  {'gamma':>10}"
@@ -133,28 +124,16 @@ def train(
         print(f"    {atype:<14}  {intercept:>10.4f}  {gamma:>10.2f}")
     pbar.update(1)
 
-    # ---- Step 1b: ASC calibration ---------------------------------------------
-    if calibrate:
-        print("\nStep 1b: ASC calibration", flush=True)
-        target_participation = {
-            atype: sum(1 for r in type_records if r["total_durations"].get(atype, 0.0) > 0)
-            / len(type_records)
-            for atype in ACTIVITY_TYPES
-        }
-        offsets = mdcev_model.calibrate(X_mdcev, target_participation, verbose=True)
-        _print_calibration_offsets(offsets, ACTIVITY_TYPES)
-        _print_mdcev_validation(mdcev_model.validate(type_records, X_mdcev), ACTIVITY_TYPES, label="post-calibration")
-
     # ---- Step 2: Episode count model ------------------------------------------
     pbar.set_description(f"Step 2: {steps[1]}")
-    print(f"\nStep 2: Episode count model", flush=True)
+    print("\nStep 2: Episode count model", flush=True)
     episode_model = EpisodeCountModel().fit(type_records)
     _print_episode_validation(episode_model.validate(type_records))
     pbar.update(1)
 
     # ---- Step 3: Start time model (for assembly ordering) ---------------------
     pbar.set_description(f"Step 3: {steps[2]}")
-    print(f"\nStep 3: Start time model", flush=True)
+    print("\nStep 3: Start time model", flush=True)
     timing_model = StartTimeModel().fit(enum_records, timing_feature_names, X=X_timing)
     pbar.update(1)
     pbar.close()
@@ -188,12 +167,6 @@ def train(
     help="Percentile cap for timing model enumeration (does not affect MDCEV)",
 )
 @click.option(
-    "--calibrate/--no-calibrate",
-    default=True,
-    show_default=True,
-    help="Run ASC calibration after MDCEV estimation to match training participation rates",
-)
-@click.option(
     "--fix-gamma/--free-gamma",
     default=True,
     show_default=True,
@@ -210,17 +183,17 @@ def main(
     output_dir: str,
     max_records: int | None,
     cap_percentile: float,
-    calibrate: bool,
     fix_gamma: bool,
     seed: int | None,
 ) -> None:
     if seed is not None:
         import random
+
         import numpy as np
 
         np.random.seed(seed)
         random.seed(seed)
-    train(attributes, schedules, output_dir, max_records, cap_percentile, calibrate, fix_gamma)
+    train(attributes, schedules, output_dir, max_records, cap_percentile, fix_gamma)
 
 
 if __name__ == "__main__":

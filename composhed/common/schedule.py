@@ -1,9 +1,9 @@
-"""Shared schedule finaliser and invariant checker (I1–I5) that counts repairs."""
+"""Shared schedule finaliser and invariant checker."""
 
 import numpy as np
 
-from composhed.data import ACTIVITY_TYPES
 from composhed.common.report import GenerationReport
+from composhed.data import ACTIVITY_TYPES
 
 DAY = 1440
 
@@ -13,7 +13,11 @@ class InvalidSchedule(ValueError):
 
 
 def check_rows(rows: list[dict]) -> None:
-    """Raise InvalidSchedule unless rows satisfy I1–I5."""
+    """Raise InvalidSchedule unless rows satisfy I1, I2, I4 and I5.
+
+    Neighbouring episodes of one type (I3) are allowed: they are generated, as in
+    the observed data, and left for the evaluation to score.
+    """
     if not rows:
         raise InvalidSchedule("empty schedule")
     if sum(r["duration"] for r in rows) != DAY:
@@ -22,8 +26,6 @@ def check_rows(rows: list[dict]) -> None:
         raise InvalidSchedule("I2: schedule must start and end at home")
     cursor = 0
     for i, r in enumerate(rows):
-        if i and rows[i - 1]["act"] == r["act"]:
-            raise InvalidSchedule("I3: consecutive identical activities")
         if not all(isinstance(r[k], int) for k in ("start", "end", "duration")):
             raise InvalidSchedule("I4: non-integer times")
         if r["start"] != cursor or r["end"] - r["start"] != r["duration"] or r["duration"] <= 0:
@@ -39,9 +41,9 @@ def finalise(seq: list[tuple[str, float]], report: GenerationReport | None = Non
     """Convert an (act, duration) sequence summing to 1440 into checked integer rows.
 
     Durations may be fractional: cumulative boundaries are rounded, so the total is
-    preserved exactly. Zero-length episodes are dropped and consecutive identical
-    activities merged; each merge is counted in ``report``. A sequence whose total
-    is not 1440 is an error, not something to repair here.
+    preserved exactly. Episodes that round to zero minutes are dropped. Neighbouring
+    episodes of one type are kept as they are. A sequence whose total is not 1440
+    is an error, not something to repair here.
     """
     total = float(sum(d for _, d in seq))
     if abs(total - DAY) > 1e-6:
@@ -49,21 +51,7 @@ def finalise(seq: list[tuple[str, float]], report: GenerationReport | None = Non
     bounds = np.rint(np.cumsum([0.0] + [float(d) for _, d in seq])).astype(int)
     bounds[-1] = DAY
     episodes = [(a, int(bounds[i]), int(bounds[i + 1])) for i, (a, _) in enumerate(seq)]
-    episodes = [e for e in episodes if e[2] > e[1]]
-
-    merged: list[list] = []
-    n_merges = 0
-    for act, s, e in episodes:
-        if merged and merged[-1][0] == act:
-            merged[-1][2] = e
-            n_merges += 1
-        else:
-            merged.append([act, s, e])
-    if report is not None and n_merges:
-        report.merges += n_merges
-        report.persons_merged += 1
-
-    rows = [{"act": a, "start": s, "end": e, "duration": e - s} for a, s, e in merged]
+    rows = [{"act": a, "start": s, "end": e, "duration": e - s} for a, s, e in episodes if e > s]
     check_rows(rows)
     return rows
 

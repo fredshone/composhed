@@ -117,7 +117,7 @@ class AFTModel:
         ss_res = np.sum((y - pred) ** 2)
         ss_tot = np.sum((y - y.mean()) ** 2)
         return {
-            "n": int(len(t)),
+            "n": len(t),
             "distr": self.distr,
             "log_r2": float(1 - ss_res / ss_tot) if ss_tot > 0 else float("nan"),
             "mae_minutes": float(np.mean(np.abs(np.exp(pred) - t))),

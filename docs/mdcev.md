@@ -35,14 +35,13 @@ uv run composhed-generate-mdcev --attributes A.csv --models models/mdcev_models.
 |---|---|---|
 | `--max-records` | all | Estimate the MDCEV model on a random sample of this many people. **Needed on the full NTS data**: estimating on all 91,706 person-days runs out of memory (Biogeme tries to allocate about 170–185 GB for the Hessian). The stability study uses 5,000. Only the MDCEV model is subsampled; the episode and timing models use everyone. |
 | `--fix-gamma / --free-gamma` | fixed | Fix each type's satiation parameter γ to its mean duration when done, or estimate γ freely. Free estimation tends to find degenerate solutions on this data. |
-| `--calibrate / --no-calibrate` | on | Adjust the constants after estimation to match participation rates (see below). |
 | `--cap-percentile` | 90 | How many episodes of each type the timing model enumerates, as a percentile of the observed counts. |
 
 ## Inputs
 
 Five person attributes: `age`, `hh_income`, `sex`, `employment` and `day`,
 one-hot encoded with the first category dropped. The spatial and car-access
-attributes (`hh_zone`, `access_egress_distance`, `veh_per_adult`) are left out. They
+attributes (`hh_zone`, `wt_travel_time_to_cities`, `veh_per_adult`) are left out. They
 matter more for location and mode choice than for how time is split.
 
 ## Components
@@ -56,24 +55,6 @@ matter more for location and mode choice than for how time is split.
 
 There is no day-type step. The kind of day follows from which types receive
 time.
-
-## Calibration
-
-After estimation, the activity-type constants are nudged until the simulated
-share of people doing each activity matches the training data:
-
-* Each pass simulates 100 draws for a random sample of 5,000 people.
-* Each constant moves by `0.1 × (log target − log simulated)`, capped at ±0.3
-  per pass.
-* Passes stop once every share is within 0.005, or after 50 passes.
-* Types done by almost everyone (target ≥ 0.99, i.e. home) are left alone:
-  pushing their constants destabilises the shared budget.
-* The offsets are stored in the model bundle.
-
-**Caveat:** calibration draws its sample from an unseeded random generator, so
-two calibrated runs with the same `--seed` give different models. Uncalibrated
-runs are reproducible. That is why the regression test
-(`tests/test_regression_existing.py`) trains MDCEV with `calibrate=False`.
 
 ## Deviations from the reference model
 
@@ -94,7 +75,6 @@ runs are reproducible. That is why the regression test
 
 | Switch | Effect |
 |---|---|
-| `--no-calibrate` | Estimation only. Also available in the stability harness as `mdcev:no-calibrate`. |
 | `--free-gamma` | Estimate the satiation parameters too. |
 | `--max-records N` | Size of the estimation sample. |
 | `--cap-percentile P` | How many numbered episodes the timing model covers. |

@@ -13,8 +13,11 @@ purposes whether the day has a tour of it, and for each of the 5 stop purposes
 education stops do not exist here: work or education inside a tour is merged
 into the work block (docs/tour_rules.md). As DaySim, patterns have at most 3
 tour purposes, at most 4 stop purposes, at most 5 of both together, and stops
-only with a tour. Observed days outside these limits are mapped to the nearest
-feasible pattern for the pattern model only (counted).
+only with a tour. As DaySim, work tours are available only to workers
+(``employment = employed``) and education tours only to students (``employment =
+student`` or a school-age child, SCHOOL / DRIVING). Observed days outside these
+rules are left out of the day-pattern estimation (counted); their tours are
+still used by the later models.
 
 Exact number of tours (DAY-1b, ``PersonExactNumberOfToursModel``): 1, 2 or 3+
 tours of each purpose in the pattern; tours beyond 3 of a purpose are dropped
@@ -74,18 +77,17 @@ def observed_pattern(tours: list[Tour]) -> tuple:
     return tuple(int(p in tp) for p in TOUR_PURPOSES) + tuple(int(p in sp) for p in STOP_PURPOSES)
 
 
-def nearest_feasible(vec: tuple) -> tuple:
-    """Drop stop flags, then tour flags, from the lowest priority up until the pattern is feasible."""
-    v = list(vec)
-    nt = len(TOUR_PURPOSES)
-    while not feasible(tuple(v[:nt]), tuple(v[nt:])):
-        on_stops = [i for i in range(nt, len(v)) if v[i]]
-        on_tours = [i for i in range(nt) if v[i]]
-        if sum(v[nt:]) > MAX_STOP_PURPOSES or sum(v) > MAX_TOUR_AND_STOP_PURPOSES and on_stops:
-            v[on_stops[-1]] = 0
-        else:
-            v[on_tours[-1]] = 0
-    return tuple(v)
+def is_worker(labels: dict) -> bool:
+    return labels.get("employment") == "employed"
+
+
+def is_student(labels: dict, ptype: str) -> bool:
+    return labels.get("employment") == "student" or ptype in ("SCHOOL", "DRIVING")
+
+
+def available(vec: tuple, worker: bool, student: bool) -> bool:
+    """DaySim's availability: work tours only for workers, school tours only for students."""
+    return (worker or not vec[0]) and (student or not vec[1])
 
 
 def pattern_tours(vec: tuple, counts: dict) -> list[str]:
@@ -102,10 +104,10 @@ class DaysimRecord:
     pid: object
     labels: dict
     ptype: str
-    pattern: tuple            # observed flags (may be infeasible)
-    model_pattern: tuple      # nearest feasible pattern (day-pattern model target)
+    pattern: tuple            # observed flags
     counts: dict              # tours per purpose, capped at MAX_TOURS_PER_PURPOSE
     tours: list[Tour] = field(default_factory=list)  # priority order
+    in_choice_set: bool = True  # feasible and available: used to estimate the day-pattern model
 
 
 def build_records(attr_df, sched_by_pid: dict, pids: set | None = None):
@@ -125,10 +127,14 @@ def build_records(attr_df, sched_by_pid: dict, pids: set | None = None):
             else:
                 caps["tours_dropped"] = caps.get("tours_dropped", 0) + 1
         vec = observed_pattern(tours)
-        model_vec = nearest_feasible(vec)
-        if model_vec != vec:
-            caps["patterns_mapped"] = caps.get("patterns_mapped", 0) + 1
+        labels = {k: row[k] for k in LABEL_COLS}
+        ptype = person_type(row["age"], row["employment"])
+        ok = feasible(vec[:len(TOUR_PURPOSES)], vec[len(TOUR_PURPOSES):])
+        if not ok:
+            caps["patterns_infeasible"] = caps.get("patterns_infeasible", 0) + 1
+        elif not available(vec, is_worker(labels), is_student(labels, ptype)):
+            caps["patterns_unavailable"] = caps.get("patterns_unavailable", 0) + 1
+            ok = False
         counts = {p: sum(t.purpose == p for t in tours) for p in TOUR_PURPOSES}
-        records.append(DaysimRecord(pid, {k: row[k] for k in LABEL_COLS}, person_type(row["age"], row["employment"]),
-                                    vec, model_vec, counts, tours))
+        records.append(DaysimRecord(pid, labels, ptype, vec, counts, tours, ok))
     return records, counters, caps

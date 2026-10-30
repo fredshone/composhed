@@ -83,9 +83,7 @@ class GenerationReport:
     """Counts every non-standard event during generation (I7, §6.4, EV-3).
 
     ``persons_repaired`` counts persons with a fallback or at least one rescale, so
-    feasibility can be reported net of repair (EV-3). Merges of consecutive
-    identical activities in finalisation are counted separately (``merges``,
-    ``persons_merged``).
+    feasibility can be reported net of repair (EV-3).
     """
 
     variant: str = ""
@@ -96,8 +94,6 @@ class GenerationReport:
     persons_rescaled: int = 0
     tours_dropped: int = 0
     stops_dropped: int = 0
-    merges: int = 0
-    persons_merged: int = 0
     persons_repaired: int = 0
     fallback_reasons: dict[str, int] = field(default_factory=dict)
     extra: dict[str, int] = field(default_factory=dict)
@@ -117,7 +113,6 @@ class GenerationReport:
         return {
             "fallback_share": self.fallbacks / n,
             "rescale_share": self.persons_rescaled / n,
-            "merge_share": self.persons_merged / n,
             "repair_share": self.persons_repaired / n,
         }
 
@@ -133,7 +128,7 @@ class GenerationReport:
             f"Generation report [{self.variant}]: persons={self.n_persons:,}  "
             f"fallbacks={self.fallbacks} ({s['fallback_share']:.2%})  resamples={self.resamples}  "
             f"rescales={self.rescales} (persons {s['rescale_share']:.2%})  tours_dropped={self.tours_dropped}  "
-            f"stops_dropped={self.stops_dropped}  merges={self.merges}  repaired={s['repair_share']:.2%}"
+            f"stops_dropped={self.stops_dropped}  repaired={s['repair_share']:.2%}"
         )
         if self.fallback_reasons:
             print(f"  fallback reasons: {self.fallback_reasons}")

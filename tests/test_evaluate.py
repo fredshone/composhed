@@ -130,7 +130,7 @@ def test_evaluate_with_label_cols_attributes(tmp_path):
     _, model_sched = _write_dataset(tmp_path, "model")
     rows = [dict(pid=i, age="27-35", hh_income="7802-21696", sex="male" if i % 2 else "female",
                  employment="" if i == 3 else "employed", day="monday", hh_zone="urban",
-                 access_egress_distance="0-1.87111", veh_per_adult="0-1") for i in range(10)]
+                 wt_travel_time_to_cities="0-1.87111", veh_per_adult="0-1") for i in range(10)]
     attr = str(tmp_path / "labels.csv")
     _write_csv(attr, rows, ["pid"] + LABEL_COLS)
     from composhed.evaluate import _load_attributes

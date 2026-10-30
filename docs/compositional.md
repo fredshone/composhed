@@ -36,7 +36,7 @@ model has no calibration step and no built-in ablations.
 ## Inputs
 
 All eight person attributes (`age`, `hh_income`, `sex`, `employment`, `day`,
-`hh_zone`, `access_egress_distance`, `veh_per_adult`) are one-hot encoded, with the
+`hh_zone`, `wt_travel_time_to_cities`, `veh_per_adult`) are one-hot encoded, with the
 first category dropped. Missing values become their own `"unknown"` category.
 The two logistic models in step 6 also standardise their features; the fitted
 scaler is saved in the model bundle.
@@ -72,8 +72,7 @@ in the morning. Nothing uses it at generation time.
 ## Calibration
 
 None. Every component is estimated once, and the generated schedules are
-whatever the chain produces. The source-aligned variants each add a calibration
-stage; their `--no-calibrate` ablation shows how much it matters.
+whatever the chain produces. No model in this repository is calibrated.
 
 ## Deviations from the reference models
 

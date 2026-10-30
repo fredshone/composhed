@@ -32,7 +32,7 @@ coefficients are taken from any of them; every model is re-estimated on NTS
 | ActivitySim | Daily activity pattern (CDAP) | Bradley & Vovsha (2005) |
 | ActivitySim | Tour scheduling over start × end alternatives with a timetable | Vovsha & Bradley (2004) |
 | ActivitySim | Model chain and order, person types, tour and stop frequency, trip purpose and trip scheduling tables | ActivitySim v1.6.0 source and `prototype_mtc` example configuration (ActivitySim Consortium, 2026); Vovsha, Petersen & Donnelly (2002) |
-| ActivitySim | Calibration by iterative adjustment of segment constants. ActivitySim v1.6.0 has no built-in calibration procedure; this is agency practice. | MWCOG (n.d.), for example |
+| ActivitySim | Utility specifications and coefficient structure of CDAP, mandatory and non-mandatory tour frequency and stop frequency (vendored spec files, coefficients re-estimated) | `prototype_mtc` v1.6.0 configs (ActivitySim Consortium, 2026) |
 | All | Multinomial, ordered and conditional logit | Train (2009) |
 | All | Accelerated failure time duration models | Kalbfleisch & Prentice (2002) |
 
@@ -49,7 +49,6 @@ coefficients are taken from any of them; every model is re-estimated on NTS
 - Bradley, M. & Vovsha, P. (2005). A model for joint choice of daily activity pattern types of household members. *Transportation*, 32(5), 545–571.
 - Hilgert, T., Heilig, M., Kagerbauer, M. & Vortisch, P. (2017). Modeling week activity schedules for travel demand models. *Transportation Research Record*, 2666, 69–77.
 - Kalbfleisch, J.D. & Prentice, R.L. (2002). *The Statistical Analysis of Failure Time Data*, 2nd ed. Wiley.
-- MWCOG (n.d.). *Gen3 Model v1.1.0 calibration efforts* (memorandum). Metropolitan Washington Council of Governments. https://www.mwcog.org/assets/1/6/Gen3_Model_v1.1.0_Calibration_Efforts_v4.pdf
 - Pinjari, A.R. & Bhat, C.R. (2011). Activity-based travel demand analysis. In de Palma, A., Lindsey, R., Quinet, E. & Vickerman, R. (eds.), *A Handbook of Transport Economics*. Edward Elgar.
 - Pinjari, A.R. & Bhat, C.R. (2021). Computationally efficient forecasting procedures for Kuhn-Tucker consumer demand model systems: application to residential energy consumption analysis. *Journal of Choice Modelling*, 39, 100283.
 - Train, K. (2009). *Discrete Choice Methods with Simulation*, 2nd ed. Cambridge University Press.

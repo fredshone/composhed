@@ -79,17 +79,16 @@ tours its frequency models cannot produce.
 | Work or education tours of one type (DaySim, ActivitySim) | 2 | 99.93% |
 | Stops per CEMDAP non-mandatory tour | 4 | 99.59% of tours |
 
-## Travel time and the 10-minute home stay
+## Travel time and the home stay between tours
 
 There are no locations, so moving between activities takes no time. The only
-cost of going home is a minimum home stay of 10 minutes between tours,
-borrowed from the compositional baseline (`HOME_INTER`):
+cost of going home is a minimum home stay between tours:
 
 * **CEMDAP:** every home stay between tours is drawn with a lower bound of 10
-  minutes.
-* **DaySim and ActivitySim:** every scheduled tour keeps a 10-minute buffer
-  free on either side. The day also starts and ends with at least 1 minute at
-  home.
+  minutes, borrowed from the compositional baseline (`HOME_INTER`).
+* **DaySim and ActivitySim:** a tour may start from the minute after the
+  previous one ends (1 minute at home), as their time windows allow. The day
+  also starts and ends with at least 1 minute at home.
 
 To check whether 10 minutes is reasonable, CEMDAP's `validation.json` records
 the 5th percentile of observed home stays between tours

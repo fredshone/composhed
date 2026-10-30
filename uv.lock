@@ -9,7 +9,7 @@ resolution-markers = [
 
 [[package]]
 name = "acteval"
-version = "0.3.0"
+version = "0.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "matplotlib" },
@@ -22,9 +22,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "tslearn" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/13/5f/e570e11765dd0037711420074aea630a533fc27d890dba787ce6604ce24a/acteval-0.3.0.tar.gz", hash = "sha256:5557557cfbf77da5aec6a6f96928e0cb9e7049c264685d4bc098c56d9528750f", size = 289504, upload-time = "2026-10-27T16:33:40.208Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/54/87/723ee0e1d6b81c61a68be72155454293f09f686d57e25b219dc118d0f3b3/acteval-0.5.0.tar.gz", hash = "sha256:0b6b387ee4baf3ee7d7e2978e1dce250ec9912fb60c712dd6b6b7feae5cc116b", size = 297293, upload-time = "2026-10-29T17:15:30.934Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9f/37/eeaf2643ff422e78145d28e01797bc93f118db3a2ba380fc3537195a122c/acteval-0.3.0-py3-none-any.whl", hash = "sha256:46a0fe390b29ea65f5054ce6271c87ada4a3d93f5afc86b3ff0ded15022ee157", size = 82179, upload-time = "2026-10-27T16:33:38.746Z" },
+    { url = "https://files.pythonhosted.org/packages/90/8a/68db5c6bdf4e1a666f4f3f4dc1d0af6c12ddd52508afb15f9d00ca61b8d2/acteval-0.5.0-py3-none-any.whl", hash = "sha256:ffda6e80d8db5a607f383a403764d75637953abd22f23e7ad4f8d61f8252c1fb", size = 84228, upload-time = "2026-10-29T17:15:29.351Z" },
 ]
 
 [[package]]
@@ -437,7 +437,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "acteval", specifier = ">=0.3.0" },
+    { name = "acteval", specifier = ">=0.5.0" },
     { name = "biogeme" },
     { name = "click", specifier = ">=8.3.3" },
     { name = "joblib" },

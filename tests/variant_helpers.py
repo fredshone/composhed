@@ -5,10 +5,12 @@ import os
 import polars as pl
 
 from composhed.data import ACTIVITY_TYPES
-from tests.test_integration import ATTR_FIELDNAMES, SCHED_FIELDNAMES, _make_synthetic_data, _write_csv
-
-# Small calibration settings keep the tests fast.
-FAST = dict(calib_iters=3, calib_sample=300)
+from tests.test_integration import (
+    ATTR_FIELDNAMES,
+    SCHED_FIELDNAMES,
+    _make_synthetic_data,
+    _write_csv,
+)
 
 
 def write_fixture(tmp_path) -> tuple[str, str, int]:
@@ -22,7 +24,7 @@ def write_fixture(tmp_path) -> tuple[str, str, int]:
 
 
 def assert_invariants(sched_path: str, n_persons: int) -> pl.DataFrame:
-    """I1–I5 for every person, and every input person present (I7)."""
+    """I1, I2, I4, I5 for every person, and every input person present (I7)."""
     df = pl.read_csv(sched_path)
     assert df["pid"].n_unique() == n_persons
     for pid, rows in df.group_by("pid", maintain_order=True):
@@ -31,7 +33,6 @@ def assert_invariants(sched_path: str, n_persons: int) -> pl.DataFrame:
         starts, ends, durs = rows["start"].to_list(), rows["end"].to_list(), rows["duration"].to_list()
         assert sum(durs) == 1440, f"pid={pid}: I1"
         assert acts[0] == "home" and acts[-1] == "home", f"pid={pid}: I2"
-        assert all(a != b for a, b in zip(acts, acts[1:])), f"pid={pid}: I3"
         assert starts[0] == 0 and ends[-1] == 1440, f"pid={pid}: I4"
         assert all(e == s for e, s in zip(ends, starts[1:])), f"pid={pid}: I4 contiguity"
         assert all(e - s == d > 0 for s, e, d in zip(starts, ends, durs)), f"pid={pid}: I4 durations"
@@ -43,7 +44,7 @@ def run_variant(train, generate, tmp_path, train_kwargs=None, seed=7):
     """Train → generate twice with the same seed; check invariants and byte-identical output (SR-20)."""
     attr, sched, n = write_fixture(tmp_path)
     models_dir = os.path.join(tmp_path, "models")
-    bundle = train(attr, sched, models_dir, seed=0, **{**FAST, **(train_kwargs or {})})
+    bundle = train(attr, sched, models_dir, seed=0, **(train_kwargs or {}))
     outs = []
     for k in range(2):
         a, s = os.path.join(tmp_path, f"a{k}.csv"), os.path.join(tmp_path, f"s{k}.csv")

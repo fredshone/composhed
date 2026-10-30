@@ -60,7 +60,7 @@ class LogNormalDuration:
         pred = self._mu(X) - self.loc_offset
         ss_tot = np.sum((y - y.mean()) ** 2)
         return {
-            "n": int(len(t)),
+            "n": len(t),
             "log_r2": float(1 - np.sum((y - pred) ** 2) / ss_tot) if ss_tot > 0 else float("nan"),
             "mae_minutes": float(np.mean(np.abs(np.exp(pred) - t))),
             "mean_actual": float(t.mean()),

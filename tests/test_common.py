@@ -1,14 +1,18 @@
-"""Unit tests for composhed.common (A2b/c): time windows, tours, choice and duration models, calibration."""
+"""Unit tests for composhed.common (A2b/c): time windows, tours, choice, spec and duration models."""
 
 import numpy as np
 import pytest
 
-from composhed.common.calibration import Target, calibrate, offset_accessors, share_dict
 from composhed.common.choice import MNL, AltAttrMNL, ConditionalLogit, OrderedLogit
 from composhed.common.hazard import AFTModel
 from composhed.common.lognormal import LogNormalDuration
 from composhed.common.periods import PeriodGrid
-from composhed.common.schedule import InvalidSchedule, check_rows, finalise, from_episodes
+from composhed.common.schedule import (
+    InvalidSchedule,
+    check_rows,
+    finalise,
+    from_episodes,
+)
 from composhed.common.timewindow import TimeWindow
 from composhed.common.tod import TourTOD, layout_rescale, tw_state
 from composhed.common.tours import ExtractionCounters, extract_day_structure
@@ -191,7 +195,7 @@ def test_alt_attr_mnl_recovers_interaction():
     y = [f"a{k}" for k in (rng.random(N)[:, None] > P.cumsum(1)).sum(1)]
     m = AltAttrMNL(attrs, ["count", "2plus"], l2=1e-6).fit(x, y, list(attrs))
     assert abs(m.coef_table()["x0"]["count"] - 1.2) < 0.1
-    m.offset[0] += 5.0  # calibration offsets are alternative-specific
+    m.offset[0] += 5.0  # offsets are alternative-specific
     assert m.predict_proba(x[:1])[0, 0] > P[0, 0]
 
 
@@ -236,31 +240,68 @@ def test_lognormal_truncated_sampling():
     assert s.min() >= 5 and s.max() <= 8
 
 
-# ---- calibration --------------------------------------------------------------------------------
-def test_calibration_converges_on_misspecified_mnl():
-    """A model without covariates calibrated to shares it was not estimated on."""
-    rng = np.random.default_rng(5)
-    X = rng.normal(size=(3000, 1))
-    m = MNL().fit(X, rng.choice(["a", "b", "c"], size=3000, p=[0.6, 0.3, 0.1]).tolist(), classes=["a", "b", "c"])
-    target = {"a": 0.2, "b": 0.3, "c": 0.5}
+# ---- spec logits -----------------------------------------------------------------------------------
+def test_spec_expressions_use_pandas_precedence():
+    from composhed.common.spec import compile_expr
 
-    def simulate():
-        return {"choice": share_dict(m.sample(X, np.random.default_rng(0)), ["a", "b", "c"])}
+    env = {"a": np.array([[1], [2]]), "b": np.array([[True], [False]]), "t": np.array([[0, 1, 2]])}
+    # pandas eval: & binds looser than ==, so this is (a == 1) and b, not a == (1 & b).
+    assert compile_expr("a == 1 & b")(env).ravel().tolist() == [1, 0]
+    assert compile_expr("~b | (a > 1)")(env).ravel().tolist() == [0, 1]
+    assert compile_expr("b * (t == 1)")(env).tolist() == [[0, 1, 0], [0, 0, 0]]
+    assert compile_expr("a * b").names == {"a", "b"}
 
-    rep = calibrate([Target("choice", target, "share", *offset_accessors(m))], simulate, max_iter=15)
-    r = rep.targets["choice"]
-    assert rep.converged and r.max_error <= r.tolerance <= 0.02
-    assert rep.targets["choice"].history[0] > 0.3
+
+def test_spec_logit_recovers_shared_coefficients_and_availability():
+    from composhed.common.spec import Spec, SpecLogit
+
+    rng = np.random.default_rng(3)
+    n = 20000
+    x = rng.normal(size=(n, 1))
+    V = np.column_stack([np.zeros(n), 0.5 + 1.0 * x[:, 0], -0.5 + 1.0 * x[:, 0]])
+    blocked = rng.random(n) < 0.3  # alternative c unavailable for 30%
+    V[blocked, 2] = -np.inf
+    P = np.exp(V) / np.exp(V).sum(1, keepdims=True)
+    y = [["a", "b", "c"][i] for i in (rng.random(n)[:, None] > P.cumsum(1)).sum(1)]
+    spec = (Spec(["a", "b", "c"], [])
+            .add("asc_b", "1", {"b": "asc_b"}).add("asc_c", "1", {"c": "asc_c"})
+            .add("x", "x", {"b": "beta_x", "c": "beta_x"})      # one coefficient on two alternatives
+            .add("blocked", "blocked", {"c": -999.0})           # a fixed -999 makes c unavailable
+            .add("never", "x * 0", {"b": "beta_none"})          # no variation: fixed at 0, listed
+            .add("missing", "z", {"b": "beta_z"}).restrict({"x", "blocked"}))
+    env = {"x": x, "blocked": blocked.reshape(n, 1)}
+    m = SpecLogit(spec, l2=1e-6).fit(env, n, y)
+    b = m.coef_table()
+    assert abs(b["beta_x"] - 1.0) < 0.05 and abs(b["asc_b"] - 0.5) < 0.1 and abs(b["asc_c"] + 0.5) < 0.1
+    assert m.unidentified_ == ["beta_none"] and spec.dropped_rows[0]["missing"] == ["z"]
+    assert m.n_params == 3
+    P_hat = m.predict_proba(env, n)
+    assert np.all(P_hat[blocked, 2] == 0)
+
+
+def test_read_spec_reads_activitysim_files():
+    from pathlib import Path
+
+    from composhed.common.spec import read_spec
+
+    d = Path(__file__).parents[1] / "composhed" / "activitysim" / "specs"
+    spec = read_spec(str(d / "mandatory_tour_frequency.csv"), coefficients=str(d / "mandatory_tour_frequency_coefficients.csv"))
+    assert spec.alternatives == ["work1", "work2", "school1", "school2", "work_and_school"]
+    # Availability rows become fixed -999 cells; literal 0 cells add nothing.
+    avail_row = next(r for r in spec.rows if r.label == "util_availability_driving_age_child")
+    assert avail_row.cells == {"work1": -999.0, "work2": -999.0}
+    ft = next(r for r in spec.rows if r.label == "util_ft_worker")
+    assert ft.cells == {"work2": "coef_ft_worker_work2_asc"}
+    nm = read_spec(str(d / "non_mandatory_tour_frequency.csv"), columns=["PTYPE_FULL"],
+                   coefficients=str(d / "non_mandatory_tour_frequency_coefficients_PTYPE_FULL.csv"))
+    assert nm.alternatives == [] and all(set(r.cells) == {"*"} for r in nm.rows)
 
 
 # ---- finalisation --------------------------------------------------------------------------------
-def test_finalise_counts_merges_and_rounds():
-    from composhed.common.report import GenerationReport
-
-    rep = GenerationReport()
-    rows = finalise([("home", 400.4), ("shop", 30.3), ("shop", 20.0), ("home", 989.3)], rep)
-    assert [r["act"] for r in rows] == ["home", "shop", "home"]
-    assert sum(r["duration"] for r in rows) == 1440 and rep.merges == 1
+def test_finalise_keeps_neighbours_and_rounds():
+    rows = finalise([("home", 400.4), ("shop", 30.3), ("shop", 20.0), ("home", 989.3)])
+    assert [r["act"] for r in rows] == ["home", "shop", "shop", "home"]
+    assert sum(r["duration"] for r in rows) == 1440
     with pytest.raises(InvalidSchedule):
         finalise([("home", 100), ("work", 100)])
     with pytest.raises(InvalidSchedule):

@@ -5,7 +5,6 @@ test persons checks that both code paths produce identical allocations when give
 the same fixed epsilon draws.
 """
 
-import io
 import logging
 import tempfile
 
@@ -16,7 +15,13 @@ import pandas as pd
 import polars as pl
 import pytest
 
-from composhed.data import ACTIVITY_TYPES, LABEL_COLS, build_training_dataset, derive_type_records, encode_features
+from composhed.data import (
+    ACTIVITY_TYPES,
+    LABEL_COLS,
+    build_training_dataset,
+    derive_type_records,
+    encode_features,
+)
 from composhed.models.mdcev import MDCEVModel
 from tests.test_integration import _make_synthetic_data
 

@@ -31,7 +31,7 @@ COLUMNS = [
     ("novel", "creativity", "novelty"),
     ("unique", "creativity", "diversity"),
 ]
-REPAIR = ["fallback_share", "rescale_share", "repair_share", "merge_share"]
+REPAIR = ["fallback_share", "rescale_share", "repair_share"]
 
 
 def load_runs(runs_dir: Path) -> pd.DataFrame:

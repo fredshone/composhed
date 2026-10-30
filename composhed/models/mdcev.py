@@ -4,12 +4,12 @@ import glob
 import os
 import re
 
+import biogeme.database as bio_db
 import numpy as np
 import pandas as pd
 import torch
-import biogeme.database as bio_db
-from biogeme.mdcev import GammaProfile
 from biogeme.expressions import Beta, Variable
+from biogeme.mdcev import GammaProfile
 
 from composhed.data import LABEL_COLS, encode_features
 
@@ -200,91 +200,12 @@ class MDCEVModel:
             self._gammas = np.array([bv[f"gamma_{_safe(t)}"] for t in self.TYPES])
         self._scale = float(bv["scale"])
 
-    def calibrate(
-        self,
-        X: np.ndarray,
-        target_participation: dict[str, float],
-        n_draws: int = 100,
-        subsample: int = 5000,
-        max_iter: int = 50,
-        tol: float = 0.005,
-        lr: float = 0.1,
-        delta_cap: float = 0.3,
-        skip_threshold: float = 0.99,
-        verbose: bool = True,
-    ) -> dict[str, float]:
-        """Adjust intercepts (ASCs) to match target participation rates.
-
-        Uses iterative log-ratio updates (standard ASC calibration):
-          delta = clip(lr * (log(target) - log(pred)), ±delta_cap)
-
-        Types with target >= skip_threshold (e.g. home, always participates) are
-        excluded — they are structurally guaranteed and calibrating them destabilises
-        the coupled budget model by inflating lambda beyond other types' psi values.
-
-        Offsets accumulate in _calibration_offsets and are persisted through
-        serialisation so a loaded model retains calibration.
-
-        Returns dict mapping each activity type to its cumulative offset.
-        """
-        type_idx = {t: i for i, t in enumerate(self.TYPES)}
-        # Exclude structural types whose target is essentially 1 — calibrating
-        # these drives their intercept to an extreme and collapses the budget.
-        targets = {
-            t: v for t, v in target_participation.items()
-            if t in type_idx and v < skip_threshold
-        }
-        if not targets:
-            return {}
-
-        N = X.shape[0]
-        rng = np.random.default_rng()
-        idx = rng.choice(N, min(subsample, N), replace=False)
-        X_cal = X[idx]
-
-        offsets = np.zeros(len(self.TYPES))
-
-        for it in range(max_iter):
-            eps = np.random.gumbel(0, 1, size=(n_draws, X_cal.shape[0], len(self.TYPES)))
-            draws = np.stack([self._numpy_forecast(X_cal, eps[d]) for d in range(n_draws)])
-            pred = (draws > 0).mean(axis=(0, 1))  # (K,)
-
-            gaps = {t: abs(v - float(pred[type_idx[t]])) for t, v in targets.items()}
-            max_gap = max(gaps.values())
-
-            if verbose:
-                parts = "  ".join(
-                    f"{t}={float(pred[type_idx[t]]):.3f}(tgt={targets[t]:.3f})"
-                    for t in self.TYPES
-                    if t in targets
-                )
-                print(f"    calib iter {it:2d}  max_gap={max_gap:.4f}  {parts}")
-
-            if max_gap < tol:
-                break
-
-            for atype, target in targets.items():
-                j = type_idx[atype]
-                p = float(np.clip(pred[j], 1e-6, 1 - 1e-6))
-                t_clip = float(np.clip(target, 1e-6, 1 - 1e-6))
-                delta = np.clip(lr * (np.log(t_clip) - np.log(p)), -delta_cap, delta_cap)
-                self._intercepts[j] += delta
-                offsets[j] += delta
-
-        self._calibration_offsets = (
-            getattr(self, "_calibration_offsets", np.zeros(len(self.TYPES))) + offsets
-        )
-        return {t: float(offsets[type_idx[t]]) for t in self.TYPES if t in type_idx}
-
     def __getstate__(self) -> dict:
         raw = self.biogeme_model_._estimation_results.raw_estimation_results
         return {
             "feature_names_": self.feature_names_,
             "TYPES": self.TYPES,
             "raw": raw,
-            "calibration_offsets": getattr(
-                self, "_calibration_offsets", np.zeros(len(self.TYPES))
-            ),
             "gamma_fixed": getattr(self, "_gamma_fixed", None),
         }
 
@@ -311,10 +232,6 @@ class MDCEVModel:
         # Biogeme correctly; override to be safe in case raw doesn't include them.
         if gamma_values is not None:
             self._gammas = np.asarray(gamma_values)
-        # Re-apply calibration offsets baked in after estimation
-        offsets = state.get("calibration_offsets", np.zeros(len(self.TYPES)))
-        self._calibration_offsets = np.asarray(offsets)
-        self._intercepts += self._calibration_offsets
 
     def _numpy_forecast(self, X: np.ndarray, epsilons: np.ndarray) -> np.ndarray:
         """Vectorised Gamma-profile MDCEV allocation (Pinjari-Bhat 2021).

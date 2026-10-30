@@ -12,8 +12,8 @@ from scripts.summarise_runs import main as summarise
 
 
 def test_parse_runs():
-    runs = _parse_runs("compositional,mdcev,cemdap", "cemdap:no-calibrate,daysim:res15", True, False)
-    assert runs == [("mdcev", ""), ("cemdap", ""), ("cemdap", "no-calibrate"), ("daysim", "res15")]
+    runs = _parse_runs("compositional,mdcev,cemdap", "cemdap:rescale,daysim:res15", True, False)
+    assert runs == [("mdcev", ""), ("cemdap", ""), ("cemdap", "rescale"), ("daysim", "res15")]
     with pytest.raises(click.BadParameter):
         _parse_runs("cemdap", "cemdap:no-segmentation", False, False)
     with pytest.raises(click.BadParameter):

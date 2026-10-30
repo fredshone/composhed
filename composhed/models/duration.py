@@ -6,7 +6,6 @@ from sklearn.linear_model import LinearRegression
 from composhed.data import DISC_TYPES, LABEL_COLS, encode_features
 
 
-
 class ActivityDurationModel:
     """Log-normal OLS regression per discretionary activity type."""
 

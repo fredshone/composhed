@@ -4,10 +4,8 @@ import os
 import time
 
 import click
-
 import joblib
 import numpy as np
-import statsmodels.api as sm
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 
@@ -114,7 +112,7 @@ def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
 
     # ---- Step 1: DAP MNLogit ---------------------------------------------------
     pbar.set_description(f"Step 1: {steps[0]}")
-    print(f"\nStep 1: DAP model", flush=True)
+    print("\nStep 1: DAP model", flush=True)
     y_dap = [r["dap"] for r in records]
     dap_model = DAPModel().fit(X_base, y_dap)
     _print_validation("Step 1 — DAP model", dap_model.validate(X_base, y_dap))
@@ -122,7 +120,7 @@ def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
 
     # ---- Step 2: Mandatory duration --------------------------------------------
     pbar.set_description(f"Step 2: {steps[1]}")
-    print(f"\nStep 2: Mandatory duration", flush=True)
+    print("\nStep 2: Mandatory duration", flush=True)
     mand_records = [r for r in records if r["dap"] in ("W", "WD", "E", "ED")]
     if mand_records:
         X_mand, _ = encode_features(mand_records, LABEL_COLS, feature_names=feature_names)
@@ -145,7 +143,7 @@ def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
 
     # ---- Step 3: Number of disc tours -----------------------------------------
     pbar.set_description(f"Step 3: {steps[2]}")
-    print(f"\nStep 3: N disc tours", flush=True)
+    print("\nStep 3: N disc tours", flush=True)
     disc_records = [r for r in records if r["dap"] in ("WD", "ED", "D")]
     if disc_records:
         X_disc, _ = encode_features(disc_records, LABEL_COLS, feature_names=feature_names)
@@ -171,7 +169,7 @@ def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
 
     # ---- Step 4: Activity type per slot ----------------------------------------
     pbar.set_description(f"Step 4: {steps[3]}")
-    print(f"\nStep 4: Activity type", flush=True)
+    print("\nStep 4: Activity type", flush=True)
     atype_model = ActivityTypeModel().fit(disc_slot_records, feature_names)
     _print_validation(
         "Step 4 — Activity type",
@@ -181,7 +179,7 @@ def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
 
     # ---- Step 5: Activity duration per type ------------------------------------
     pbar.set_description(f"Step 5: {steps[4]}")
-    print(f"\nStep 5: Activity duration", flush=True)
+    print("\nStep 5: Activity duration", flush=True)
     dur_model = ActivityDurationModel().fit(disc_slot_records, feature_names)
     _print_validation(
         "Step 5 — Activity duration",
@@ -191,7 +189,7 @@ def train(attributes_path: str, schedules_path: str, output_dir: str) -> None:
 
     # ---- Step 6: Anchor timing -------------------------------------------------
     pbar.set_description(f"Step 6: {steps[5]}")
-    print(f"\nStep 6: Anchor timing", flush=True)
+    print("\nStep 6: Anchor timing", flush=True)
     anchor_model = AnchorTimingModel().fit(records, feature_names, scaler)
     _print_validation(
         "Step 6 — Anchor timing",

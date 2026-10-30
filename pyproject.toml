@@ -12,7 +12,7 @@ dependencies = [
     "scikit-learn",
     "joblib",
     "biogeme",
-    "acteval>=0.3.0",
+    "acteval>=0.5.0",
     "torch>=2.11.0",
     "click>=8.3.3",
 ]

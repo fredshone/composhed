@@ -4,7 +4,12 @@ import click
 
 from composhed.cemdap.chain import CemdapChain
 from composhed.common.bundle import load_bundle
-from composhed.common.cli import default_report_path, generate_options, make_rng, write_outputs
+from composhed.common.cli import (
+    default_report_path,
+    generate_options,
+    make_rng,
+    write_outputs,
+)
 from composhed.common.report import GenerationReport
 from composhed.common.runner import generate_population
 

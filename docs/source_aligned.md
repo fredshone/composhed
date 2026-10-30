@@ -6,21 +6,25 @@ decisions are made, in what order, and with what kind of model. They are not
 the frameworks themselves. All three:
 
 * use only what is in the NTS data: no locations, modes, networks or travel
-  times. Moving between activities takes no time, but a trip from home is
-  always followed by at least 10 minutes at home (`HOME_INTER`, borrowed from
-  the [compositional baseline](compositional.md));
+  times. Moving between activities takes no time. Between two tours CEMDAP
+  keeps at least 10 minutes at home (`HOME_INTER`, borrowed from the
+  [compositional baseline](compositional.md)); DaySim and ActivitySim keep
+  1 minute, the least a schedule with a home episode between the tours can
+  show;
 * model one person's day, with no household interactions or joint trips;
-* re-estimate every coefficient on NTS 2023. No published coefficients are
-  reused, but the utility terms follow each source's own specification (DaySim's
-  C# model code, ActivitySim's `prototype_mtc` spec files), so the fit to NTS
-  comes only through those forms;
+* re-estimate every coefficient on NTS 2023, with no calibration. No
+  published coefficients are reused. DaySim's and ActivitySim's utilities are
+  their sources' own terms (DaySim's C# model code; ActivitySim's
+  `prototype_mtc` spec files, read directly), keeping the terms whose
+  variables NTS has and adding only day of week
+  ([DaySim and ActivitySim compared with their sources](source_differences.md));
 * turn chosen time periods into minutes by a uniform draw over the free minutes
   of the period (DaySim's `GetAvailableMinute`; ActivitySim stops at periods),
   never from NTS's observed minutes;
 * read their training data through one shared set of tour rules
   ([tour_rules.md](tour_rules.md));
 * share their code in `composhed/common/` (choice models, duration models,
-  time windows, calibration, reports). Nothing in `composhed/common/` is used by
+  spec-file logits, time windows, reports). Nothing in `composhed/common/` is used by
   the compositional or MDCEV pipelines, whose outputs are pinned by
   `tests/test_regression_existing.py`.
 
@@ -37,9 +41,6 @@ all three accept:
 
 | Option | Default | Effect |
 |---|---|---|
-| `--calibrate / --no-calibrate` | on | Run the calibration stage (below). |
-| `--calib-iters` | 8 | Maximum calibration passes. |
-| `--calib-sample` | 20,000 | Training people simulated in each pass. |
 | `--independent-timing` | off | Ablation: replace the joint timing model with compositional-style timing. |
 | `--consistency {constraint,rescale}` | constraint | Ablation: make days fit by construction, or by shrinking afterwards. |
 | `--max-resample` | 50 | How many times a draw that doesn't fit is redrawn before giving up. |
@@ -47,44 +48,15 @@ all three accept:
 
 Each variant adds its own options; see its page.
 
-## Calibration
-
-Estimated models rarely reproduce the training data exactly once they are
-chained together, so all three variants calibrate the way practitioners
-calibrate the real frameworks (by their own iterative scripts: ActivitySim, for
-one, has no built-in calibration). Each pass:
-
-1. Simulates the whole chain for a fixed sample of training people. Every pass
-   restarts the random generator from the same seed. This reuses the random
-   numbers only approximately: one generator runs through all people in turn,
-   so once a person's choices change, the number of draws they take changes
-   and everyone after them gets different numbers. (ActivitySim instead gives
-   each person and model step its own random stream.)
-2. Compares simulated shares and means against the training data.
-3. Moves each constant by a damped log-ratio step towards its target.
-
-Calibration stops when every target is within tolerance, or when it runs out
-of passes. The best pass is kept, not the last.
-
-* **Shares:** within max(0.01, 2 simulation standard errors) of the target.
-  Small groups, such as about 120 simulated university students, therefore get
-  a wider tolerance than large ones.
-* **Means and spreads:** within 2% of the target.
-
-Each variant's page lists what it calibrates. The full report, with each
-target's history and tolerance, is in `validation.json` under
-`info.calibration`. On NTS 2023 (5 seeds) CEMDAP and DaySim converge on every
-seed. ActivitySim does not always converge, because its targets interact; see
-[its page](activitysim.md#calibration).
-
 ## Feasibility and the generation report
 
 Each variant makes days fit in its own way: truncated draws (CEMDAP) or time
 windows that remove impossible choices (DaySim, ActivitySim). When that still
 fails:
 
-* the person is redrawn (up to `--max-resample`);
-* if that fails too, an extra tour or stop is dropped;
+* a draw is repeated (up to `--max-resample`); DaySim, as its source,
+  simulates the whole person-day again;
+* if that fails too, the tour or stop is dropped;
 * as a last resort, the person gets an all-home day.
 
 Every one of these events is counted in `generation_report.json`, which is
@@ -95,7 +67,6 @@ Every generated day is checked before it is written:
 
 * it covers exactly 1,440 minutes;
 * it starts and ends at home;
-* no two neighbouring activities have the same type;
 * every duration is positive.
 
 ## Reproducibility
@@ -109,6 +80,6 @@ error.
 
 | File | Contents |
 |---|---|
-| `models/<variant>_models.pkl` | Fitted models, coefficient tables, configuration, calibration targets and report |
-| `models/validation.json` | Fit of each component, training-data extraction counts, calibration report, held-out fit if requested |
-| `generation_report.json` | Counts of redraws, dropped tours and stops, shrunk days, merges and fallbacks |
+| `models/<variant>_models.pkl` | Fitted models, coefficient tables and configuration |
+| `models/validation.json` | Fit, parameter count and coefficients of each component, training-data extraction counts, held-out fit if requested |
+| `generation_report.json` | Counts of redraws, dropped tours and stops, shrunk days and fallbacks |

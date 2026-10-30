@@ -77,23 +77,6 @@ which is 1 minute per remaining stop, 10 minutes per remaining home stay and 1
 minute for the final home stay. The remaining-time covariates used in training
 are computed in the same order.
 
-## Calibration
-
-[Shared method](source_aligned.md#calibration).
-
-**What is adjusted:**
-* the constants of the participation logits, the four position-count models,
-  the trip-count and stops-per-trip models, and the stop-type model;
-* the AFT locations for work / school start, work / school duration, stop
-  durations by type, home stays and first departure;
-* the AFT scales for work / school start and duration.
-
-**What is matched:**
-* the share of people in each outcome;
-* mean durations and start times;
-* for work / school start and duration, the gap between the 10th and 90th
-  percentiles.
-
 ## Deviations from CEMDAP
 
 * **No locations, modes or travel times.** Moving takes no time; the only cost
@@ -110,14 +93,11 @@ are computed in the same order.
 * **Own estimation code.** The logits and ordered logits use the repository's
   own L-BFGS code (`common/choice.py`, same likelihood as statsmodels but much
   faster). The AFT models use custom maximum likelihood (`common/hazard.py`).
-* **Calibration is an extra stage.** CEMDAP's published models have no
-  equivalent.
 
 ## Ablations
 
 | Switch | Effect |
 |---|---|
-| `--no-calibrate` | Estimation only. |
 | `--independent-timing` | Work / school start from a kernel density estimate per employment category, and duration from a log-normal regression that ignores the start time (compositional style). |
 | `--consistency rescale` | Durations are drawn without bounds; a morning or evening that overflows is shrunk proportionally (counted). |
 

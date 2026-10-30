@@ -80,8 +80,9 @@ time still free, so days never overflow.
 
 ### DaySim-aligned
 
-Follows DaySim's model chain, with each model's terms taken from the DaySim
-source code:
+Follows DaySim's model chain, with each model's utility terms transcribed
+from the DaySim source code (keeping those whose variables NTS has) and
+DaySim's worker / student availability rules:
 
 1. A day-pattern choice over all 1,324 combinations says which tour purposes
    and which stop purposes the day has; a second model sets the exact number
@@ -97,8 +98,10 @@ source code:
 
 ### ActivitySim-aligned
 
-Follows ActivitySim's person-level chain, in ActivitySim's order, with
-separate models for each person type (full-time worker, retiree, student, ...):
+Follows ActivitySim's person-level chain, in ActivitySim's order. The choice
+models read ActivitySim's own `prototype_mtc` spec files (vendored in
+`composhed/activitysim/specs/`), with one non-mandatory frequency coefficient
+set per person type as there:
 
 1. Daily activity pattern.
 2. Mandatory tour frequency, then scheduling.
@@ -119,7 +122,10 @@ The CEMDAP, DaySim and ActivitySim variants share several features:
   at a time;
 * exact minutes drawn uniformly inside chosen time periods (DaySim and
   ActivitySim);
-* a simulation-based calibration stage;
+* DaySim and ActivitySim use their sources' own variables, mapped from the
+  NTS labels, with day of week as the only addition
+  ([docs/source_differences.md](docs/source_differences.md));
+* coefficients re-estimated on NTS, with no calibration;
 * a report of every repair made during generation;
 * byte-identical output for a fixed seed.
 
@@ -192,7 +198,7 @@ uv run composhed-evaluate \
 
 Stability runs usually share the machine, so their times are not clean.
 `scripts/time_models.py` takes the same `--attributes`, `--schedules`,
-`--variants`, `--ablations` and `--calibrate / --no-calibrate` options and
+`--variants` and `--ablations` options and
 trains and generates one model at a time, without evaluation. It writes wall
 time, CPU time, peak memory and the load average before each stage to
 `timing_runs/timings.csv` (default one seed, one BLAS thread). Run it on an
@@ -203,7 +209,7 @@ uv run python run_stability.py \
   --attributes /path/to/binned_attributes.parquet \
   --schedules /path/to/activity_schedules.parquet \
   --variants compositional,mdcev,cemdap,daysim,activitysim \
-  --ablations cemdap:no-calibrate,daysim:res15,activitysim:no-segmentation \
+  --ablations daysim:res15,activitysim:no-segmentation \
   --mdcev-max-records 5000 \
   --out-dir stability_runs/
 uv run python scripts/summarise_runs.py --runs-dir stability_runs/ [--external actvae.csv]
@@ -213,11 +219,10 @@ uv run python scripts/summarise_runs.py --runs-dir stability_runs/ [--external a
 |---|---|---|
 | `--seeds` | `0,1,2,3,4` | Seeds to run |
 | `--variants` | all five | Models to run |
-| `--ablations` | none | Extra runs as `<model>:<preset>`. Presets: `no-calibrate`, `independent-timing`, `rescale`, `res15`, `res30`, `res60`, `no-segmentation` |
+| `--ablations` | none | Extra runs as `<model>:<preset>`. Presets: `independent-timing`, `rescale`, `res15`, `res30`, `res60`, `no-segmentation` |
 | `--target-schedules` | `--schedules` | Schedules to evaluate against |
 | `--evaluate / --no-evaluate` | on | Run acteval for each run |
-| `--calibrate / --no-calibrate` | on | `--no-calibrate` skips calibration for every model that has it (MDCEV, CEMDAP, DaySim, ActivitySim) |
-| `--split-order` | none | Score each slice of the eight labels at this acteval order (e.g. `2` for label pairs). Default: whole population only. |
+| `--split-order` | 2 | Score each slice of the eight labels at this acteval order (2: every pair of labels). 0: whole population only. |
 | `--skip-existing` | off | Skip runs that already have results |
 | `--mdcev-max-records` | all | MDCEV estimation sample size. Use 5000 on full NTS, which otherwise runs out of memory. |
 
@@ -239,28 +244,29 @@ The summary script writes `summary.csv` (one row per run) and
 
 These results use the foundata NTS 2023 data: 91,706 person-days, of which 41%
 are stay-at-home days. Each run generates one synthetic day per person-day.
-Scores are acteval distances within label pairs (`split_order=2`), so lower is
-better. Each value is the mean ± standard deviation over 5 seeds. **No model
-is calibrated** (`--no-calibrate`). Feasibility is 0 for every model.
+Scores are acteval 0.5 distances within label pairs (`split_order=2`), so lower
+is better. Each value is the mean ± standard deviation over 5 seeds. **No model
+is calibrated** (calibration has been removed from the code). Feasibility is 0
+for every model.
 
 acteval scores each combination of two labels on its own (for example
 `age = 18-27 & employment = student`) and then averages over the slices.
-There are 749 slices. The 42 with fewer than 30 observed person-days are
+There are 676 slices; the 40 with fewer than 30 observed person-days are
 skipped. The question is whether each model reproduces schedules *for each
 kind of person*, not just overall.
 
 | Model | Participations | Transitions | Timing | Creativity |
 |---|---|---|---|---|
-| Compositional | 0.043 ± 0.001 | 0.0050 ± 0.0000 | 0.052 ± 0.000 | 0.218 ± 0.001 |
-| MDCEV¹ | 0.157 ± 0.009 | 0.0098 ± 0.0001 | 0.081 ± 0.003 | **0.202 ± 0.009** |
-| CEMDAP | 0.048 ± 0.001 | 0.0048 ± 0.0000 | 0.031 ± 0.000 | 0.207 ± 0.001 |
-| DaySim | 0.065 ± 0.001 | **0.0038 ± 0.0000** | 0.032 ± 0.000 | 0.258 ± 0.001 |
-| ActivitySim | **0.031 ± 0.001** | 0.0042 ± 0.0000 | **0.023 ± 0.000** | 0.267 ± 0.001 |
+| Compositional | **0.057 ± 0.001** | 0.0201 ± 0.0004 | 0.052 ± 0.000 | 0.089 ± 0.001 |
+| MDCEV¹ | 0.223 ± 0.013 | 0.0439 ± 0.0007 | 0.078 ± 0.003 | **0.084 ± 0.007** |
+| CEMDAP | 0.067 ± 0.000 | 0.0204 ± 0.0003 | 0.030 ± 0.000 | 0.088 ± 0.001 |
+| DaySim | 0.066 ± 0.001 | **0.0152 ± 0.0001** | **0.0266 ± 0.0002** | 0.091 ± 0.001 |
+| ActivitySim | 0.079 ± 0.002 | 0.0183 ± 0.0001 | 0.0290 ± 0.0002 | 0.089 ± 0.001 |
 
 | Ablation | Participations | Transitions | Timing | Creativity |
 |---|---|---|---|---|
-| DaySim, 15-min periods | 0.065 ± 0.001 | 0.0038 ± 0.0000 | 0.032 ± 0.000 | 0.258 ± 0.001 |
-| ActivitySim, no segmentation | 0.035 ± 0.001 | 0.0044 ± 0.0000 | 0.024 ± 0.000 | 0.267 ± 0.001 |
+| DaySim, 15-min periods | 0.067 ± 0.002 | 0.0153 ± 0.0002 | 0.0263 ± 0.0002 | 0.092 ± 0.000 |
+| ActivitySim, no segmentation | 0.086 ± 0.001 | 0.0241 ± 0.0001 | 0.0311 ± 0.0002 | 0.089 ± 0.001 |
 
 ¹ MDCEV was estimated on 500 person-days with free gamma
 (`--mdcev-max-records 500`). Its episode-count and timing models use all
@@ -269,24 +275,36 @@ person-days.
 * **They measure fit, not generalisation.** Generation uses the training
   attributes and is compared with the training schedules.
 * **No repairs were needed.** No source-aligned run needed a person-level
-  fallback or a rescale.
-* **Without calibration, DaySim's participations score is weak.** Its
-  day-pattern model, which has 62 patterns, under-predicts stay-at-home days.
-* **ActivitySim's per-person-type coefficients help.** Its participations
-  score is 0.031 with them and 0.035 without.
-* **DaySim and ActivitySim copy observed days most often.** About 7% of their
-  days exactly match a training day, against under 0.5% for the other models.
-  This is why their creativity scores are high.
-* **Earlier results are not comparable.** Those used the older NTS extract
-  (56,734 days, no stay-at-home days, `medical` and `vehicles`) and calibrated
-  models. They are kept in `stability_runs/`.
+  fallback or a rescale. About 4% of days in each source-aligned model have
+  two neighbouring episodes of one type merged; ActivitySim drops about 300
+  stops a run that do not fit their tour.
+* **DaySim and ActivitySim now use their sources' variables.** Each model has
+  only the terms its source uses whose variables NTS has, plus Saturday and
+  Sunday; the sources' availability rules apply; no rules were added for our
+  output format. ActivitySim reads `prototype_mtc`'s own spec files. See
+  [docs/source_differences.md](docs/source_differences.md).
+* **That removed their advantage on participations.** With every label in
+  every model, ActivitySim and DaySim were best on participations; now the
+  compositional model, which still uses all eight labels, is. DaySim remains
+  best on transitions and timing, which come from its tour and stop structure.
+* **ActivitySim's per-person-type coefficients help.** Non-mandatory tour
+  frequency has one coefficient set per person type, as in the source. Without
+  it, participations go from 0.079 to 0.086.
+* **15-minute periods barely change DaySim** and take much longer to train.
+* **Earlier rounds are not comparable.** acteval 0.5, the
+  `wt_travel_time_to_cities` label (which replaced `access_egress_distance`)
+  and so the slices all changed; even the unchanged compositional model moved
+  (transitions 0.005 → 0.020, creativity 0.218 → 0.089). Earlier results are
+  in `stability_runs_nts2023/_previous_version_2/` (all labels in every
+  model, older acteval), `_previous_version/` (minutes copied from NTS) and
+  `stability_runs/` (older NTS extract, calibrated).
 * **Result files:** `stability_runs_nts2023/summary_table.csv` (per-seed
   values are in `summary.csv`). The command was:
 
 ```bash
 uv run python run_stability.py --attributes .../binned_attributes.parquet \
   --schedules .../activity_schedules.parquet --out-dir stability_runs_nts2023 \
-  --seeds 0,1,2,3,4 --no-calibrate --split-order 2 --mdcev-max-records 500 \
+  --seeds 0,1,2,3,4 --mdcev-max-records 500 \
   --ablations daysim:res15,activitysim:no-segmentation
 ```
 
@@ -294,10 +312,9 @@ uv run python run_stability.py --attributes .../binned_attributes.parquet \
 
 ## Todo
 
-- Check the CEMDAP and DaySim components against their primary sources ([docs/citations.md](docs/citations.md)); ActivitySim was checked against v1.6.0 (`reports/ActivitySim variant fidelity.md`)
-- ActivitySim variant: per-person random-number streams (as ActivitySim), so calibration passes reuse the same draws exactly
+- Check the CEMDAP components against their primary sources ([docs/citations.md](docs/citations.md)); DaySim and ActivitySim follow their source code and spec files ([docs/source_differences.md](docs/source_differences.md))
+- ActivitySim variant: per-person random-number streams (as ActivitySim)
 - Household CDAP and joint tours for the ActivitySim variant
-- Seed the MDCEV calibration sample so calibrated MDCEV runs are reproducible
 - Evaluation on a held-out test split, matching ActVAE
 - Tours from work (currently merged into the work block)
 - Location and mode choice (omitted by design, to match Caveat's scope)

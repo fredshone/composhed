@@ -1,17 +1,21 @@
-"""Shared train / generate / calibrate plumbing for the source-aligned variants."""
+"""Shared train / generate plumbing for the source-aligned variants."""
 
 import os
-import time
 
 import numpy as np
 from tqdm import tqdm
 
-from composhed.common.calibration import CalibrationReport, Target, calibrate
 from composhed.common.report import GenerationReport
 from composhed.common.schedule import home_day
 from composhed.common.split import holdout_split
 from composhed.common.tours import group_schedules
-from composhed.data import LABEL_COLS, encode_features, encode_for_generation, load_attributes, load_schedules
+from composhed.data import (
+    LABEL_COLS,
+    encode_features,
+    encode_for_generation,
+    load_attributes,
+    load_schedules,
+)
 
 
 def load_training_data(attributes: str, schedules: str, holdout_fraction: float, split_seed: int):
@@ -53,65 +57,6 @@ def generate_population(chain, attributes: str, feature_names: list[str], rng: n
         for r in rows:
             sched_rows.append({"pid": attrs["pid"], **r})
     return attr_rows, sched_rows
-
-
-def simulate_traces(chain, X: np.ndarray, attr_rows: list[dict], seed: int) -> list[dict]:
-    """Run the chain on the given persons with common random numbers; return traces."""
-    rng = np.random.default_rng(seed)
-    report = GenerationReport()
-    traces = []
-    for x, attrs in zip(X, attr_rows):
-        try:
-            traces.append(chain.generate(x, attrs, rng, report)[1])
-        except Exception:  # noqa: BLE001
-            continue
-    return traces
-
-
-def run_calibration(chain, targets: list[Target], stats_fn, X: np.ndarray, attr_rows: list[dict],
-                    sample: int, iters: int, seed: int | None) -> CalibrationReport:
-    """SR-15/16/17: calibrate on a sample of *training* persons."""
-    rng = np.random.default_rng(seed)
-    n = len(attr_rows)
-    reps = max(1, int(np.ceil(sample / max(n, 1)))) if n < sample else 1
-    idx = rng.choice(n, size=min(sample, n), replace=False) if n > sample else np.tile(np.arange(n), reps)
-    Xs = X[idx]
-    rows = [attr_rows[i] for i in idx]
-    sim_seed = int(rng.integers(2**31))
-    t0 = time.time()
-
-    def simulate():
-        return stats_fn(simulate_traces(chain, Xs, rows, sim_seed))
-
-    print(f"  calibrating on {len(idx):,} simulated persons (max {iters} iterations)...")
-    rep = calibrate(targets, simulate, max_iter=iters)
-    print(f"  calibration done in {time.time() - t0:.0f}s")
-    rep.print()
-    return rep
-
-
-def targets_from_specs(observed: dict[str, dict], specs: dict[str, tuple]) -> list[Target]:
-    """Build Target objects for every spec whose observed statistic exists.
-
-    specs: name -> (kind, get, set[, lr_scale])
-    """
-    out = []
-    for name, spec in specs.items():
-        if name in observed and observed[name]:
-            out.append(Target(name, observed[name], *spec))
-    return out
-
-
-def scale_accessors(model):
-    """get/set closures exposing log(scale multiplier) of a duration model (spread targets)."""
-
-    def get() -> dict:
-        return {"mean": float(np.log(model.scale_mult))}
-
-    def set_(d: dict) -> None:
-        model.scale_mult = float(np.exp(d["mean"]))
-
-    return get, set_
 
 
 def output_paths(output_dir: str, variant: str) -> tuple[str, str]:

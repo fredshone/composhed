@@ -4,7 +4,9 @@ Order as ActivitySim's pipeline: CDAP → mandatory tour frequency → mandatory
 tour scheduling → non-mandatory tour frequency (seeing the residual time window)
 and its extension → non-mandatory tour scheduling → stop frequency → trip
 purpose → trip scheduling. Trip departures are chosen as periods; the minute is
-drawn uniformly from the feasible minutes of the period.
+drawn uniformly from the feasible minutes of the period. A stop may have
+the purpose of the activity next to it; the two are written as separate
+episodes.
 """
 
 from collections import Counter
@@ -13,19 +15,17 @@ import numpy as np
 
 from composhed.activitysim.data import NM_ORDER, NTS_ACT, WORKER_TYPES, mtf_tours
 from composhed.activitysim.models import (
-    GROUPS,
     STOP_ACTS,
     AsimModels,
     hour_band,
     residual_window,
+    stop_segment,
     tod_group,
     tour_class,
     tour_contexts,
-    x_nmtf,
-    x_stopfreq,
+    tour_env,
 )
 from composhed.activitysim.persontype import person_type
-from composhed.common.calibration import share_dict
 from composhed.common.report import GenerationReport
 from composhed.common.schedule import home_day
 from composhed.common.tourgen import PlannedTour, place_tours, tours_to_rows
@@ -56,20 +56,20 @@ class AsimChain:
                  report: GenerationReport) -> tuple[list[dict], dict]:
         m = self.m
         ptype = person_type(attrs["age"], attrs["employment"])
-        x1 = xl[None, :]
-        cdap = m.cdap.sample(x1, [ptype], rng)[0]
+        env = m.person_env([attrs])
+        cdap = m.cdap.sample(env, 1, rng)[0]
         trace = {"ptype": ptype, "cdap": cdap, "mtf": None, "nm": None, "tours": [], "stop_alts": []}
         if cdap == "H":
             return home_day(), trace
         mand: list[str] = []
-        if cdap == "M" and m.mtf is not None:
-            trace["mtf"] = m.mtf.sample(x1, [ptype], rng)[0]
+        if cdap == "M":
+            trace["mtf"] = m.mtf.sample(env, 1, rng)[0]
             mand = mtf_tours(trace["mtf"], ptype in WORKER_TYPES)
         placed = self._place(self._plan(mand, attrs, ptype, trace["mtf"], len(mand), []), xl, rng, report)
-        if m.nmtf is not None:
+        seg = m.nm_segment(ptype)
+        if seg in m.nmtf:
             window = residual_window([(int(t.start), int(t.end)) for t in placed], m.home_inter)
-            avail = m._nm_avail([cdap])
-            label = m.nmtf.sample(x_nmtf(xl, cdap, len(mand), window)[None, :], [ptype], rng, avail)[0]
+            label = m.nmtf[seg].sample(m.nm_env(env, [len(mand)], [window]), 1, rng)[0]
             trace["nm"] = label
             nm = []
             for p, n in zip(NM_ORDER, m.nm_vectors[label]):
@@ -81,16 +81,19 @@ class AsimChain:
                                  prior=placed)
         counts = Counter(t.purpose for t in placed)
         for t in placed:
-            self._stops(xl, ptype, t, counts, rng, report, trace)
+            self._stops(env, ptype, t, counts, rng, report, trace)
             trace["tours"].append((t.group, t.start, t.end))
         for t in placed:
             t.purpose = NTS_ACT[t.purpose]
         return tours_to_rows(placed, report), trace
 
-    def _stops(self, xl, ptype, t: PlannedTour, counts, rng, report, trace) -> None:
+    def _stops(self, env, ptype, t: PlannedTour, counts, rng, report, trace) -> None:
         m = self.m
-        alt = m.stopfreq.sample(x_stopfreq(xl, t.start, t.end, counts)[None, :], [t.purpose], rng)[0] \
-            if m.stopfreq is not None else "0out_0in"
+        seg = stop_segment(t.purpose, ptype)
+        alt = "0out_0in"
+        if seg in m.stopfreq:
+            e = env | tour_env([t.purpose], [t.start], [t.end], [counts], [ptype == "UNIV"])
+            alt = m.stopfreq[seg].sample(e, 1, rng)[0]
         trace["stop_alts"].append((t.purpose, alt))
         n_out, n_in = int(alt[0]), int(alt.split("_")[1][0])
         dur = int(t.end - t.start)
@@ -110,13 +113,10 @@ class AsimChain:
             key = ("outbound", cls, a_out, t.purpose, min(k, 2))
             cursor = self._departure(key, cursor + 1, hi, rng, report)
             deps.append(cursor)
-        primary = NTS_ACT[t.purpose]
-        prev, prev_act = S, None
-        for k, d in enumerate(deps):
-            avoid = {prev_act} | ({primary} if k == n_out - 1 else set())
-            act = self._purpose(t.purpose, "outbound", S, ptype, avoid, rng)
-            t.outbound.append((act, d - prev))
-            prev, prev_act = d, act
+        prev = S
+        for d in deps:
+            t.outbound.append((self._purpose(t.purpose, "outbound", S, ptype, rng), d - prev))
+            prev = d
         # Inbound, backwards from the tour end: departures from the primary and from each stop but the last.
         in_deps, cursor = [0.0] * n_in, E
         for b in range(n_in):
@@ -126,23 +126,12 @@ class AsimChain:
             cursor = self._departure(key, lo, cursor - 1, rng, report)
             in_deps[k] = cursor
         bounds = in_deps + [E]
-        prev_act = primary
         for k in range(n_in):
-            act = self._purpose(t.purpose, "inbound", E, ptype, {prev_act}, rng)
-            t.inbound.append((act, bounds[k + 1] - bounds[k]))
-            prev_act = act
+            t.inbound.append((self._purpose(t.purpose, "inbound", E, ptype, rng), bounds[k + 1] - bounds[k]))
 
-    def _purpose(self, tour_purpose, direction, anchor, ptype, avoid: set, rng) -> str:
-        """ASIM-8: stop purpose from the lookup, excluding the purpose of the adjacent activity.
-
-        Two adjacent episodes of one purpose would be merged into one in the
-        location-free schedule output, silently removing the stop.
-        """
-        p = self.m.trip_purpose.probs((tour_purpose, direction, hour_band(anchor), ptype)).copy()
-        ok = np.array([a not in avoid for a in STOP_ACTS])
-        p = np.where(ok, p, 0.0)
-        if p.sum() <= 0:
-            p = ok.astype(float)
+    def _purpose(self, tour_purpose, direction, anchor, ptype, rng) -> str:
+        """ASIM-8: stop purpose from the lookup."""
+        p = self.m.trip_purpose.probs((tour_purpose, direction, hour_band(anchor), ptype))
         return STOP_ACTS[int(rng.choice(len(STOP_ACTS), p=p / p.sum()))]
 
     def _departure(self, key: tuple, lo: float, hi: float, rng, report) -> float:
@@ -170,52 +159,3 @@ class AsimChain:
         a = max(lo_i, int(grid.lo(period)) + 1)
         b = min(hi_i, int(grid.hi(period)))
         return float(rng.integers(a, b + 1))
-
-
-# ---- calibration statistics ------------------------------------------------------------------------
-def record_trace(rec, models: AsimModels) -> dict:
-    from composhed.activitysim.models import stop_alt
-
-    return {"ptype": rec.ptype, "cdap": rec.cdap, "mtf": rec.mtf,
-            "nm": models.map_nm(rec.nm) if rec.cdap in ("M", "N") else None,
-            "tours": [(tod_group(t.purpose), t.start, t.end) for t in rec.tours],
-            "stop_alts": [(t.purpose, stop_alt(len(t.outbound), len(t.inbound))) for t in rec.tours]}
-
-
-def trace_stats(traces: list[dict], models: AsimModels, timing: str = "tod") -> dict[str, dict]:
-    out: dict[str, dict] = {}
-    m = models
-    for key in m.cdap.models:
-        sel = [t for t in traces if m.cdap.key(t["ptype"]) == key]
-        if sel:
-            out[f"cdap:{key}"] = share_dict([t["cdap"] for t in sel], m.cdap_classes)
-    if m.mtf is not None:
-        for key in m.mtf.models:
-            sel = [t for t in traces if t["mtf"] is not None and m.mtf.key(t["ptype"]) == key]
-            if sel:
-                out[f"mtf:{key}"] = share_dict([t["mtf"] for t in sel], m.mtf_classes)
-    if m.nmtf is not None:
-        for key in m.nmtf.models:
-            sel = [t for t in traces if t["nm"] is not None and m.nmtf.key(t["ptype"]) == key]
-            if sel:
-                out[f"nmtf:{key}"] = share_dict([t["nm"] for t in sel], list(m.nm_vectors))
-    if m.stopfreq is not None:
-        alts = [a for t in traces for a in t["stop_alts"]]
-        for key in m.stopfreq.models:
-            sel = [a for p, a in alts if m.stopfreq.key(p) == key]
-            if sel:
-                out[f"stopfreq:{key}"] = share_dict(sel, m.stop_classes)
-    tours = [x for t in traces for x in t["tours"]]
-    for g in GROUPS:
-        tod = m.tod.get(g)
-        gt = [x for x in tours if x[0] == g]
-        if tod is None or not gt:
-            continue
-        if timing == "tod":
-            out[f"tod_start_{g}"] = share_dict([int(tod.grid.period_of(x[1])) for x in gt], range(tod.grid.n))
-            out[f"tod_end_{g}"] = share_dict([int(tod.grid.end_period_of(x[2])) for x in gt], range(tod.grid.n))
-            out[f"tod_duration_{g}"] = share_dict([int(tod.dbin[tod.alt_of(x[1], x[2])]) for x in gt],
-                                                  range(tod.n_dur_bins))
-        else:
-            out[f"tour_duration_mean_{g}"] = {"mean": float(np.mean([x[2] - x[1] for x in gt]))}
-    return out

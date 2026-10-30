@@ -6,7 +6,6 @@ from sklearn.linear_model import LogisticRegression
 
 from composhed.data import DISC_TYPES, LABEL_COLS, encode_features
 
-
 # Ordered placement classes for tour-placement model (index = class integer)
 PLACEMENT_CLASSES = [
     "mandatory_outbound",

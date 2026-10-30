@@ -795,15 +795,6 @@ def _to_rows(seq: list[tuple[str, int]]) -> list[dict]:
     # Remove zero-duration activities
     seq = [(a, d) for a, d in seq if d > 0]
 
-    # Merge consecutive same-type activities (e.g. two "visit" slots → one)
-    merged: list[tuple[str, int]] = []
-    for act, dur in seq:
-        if merged and merged[-1][0] == act:
-            merged[-1] = (act, merged[-1][1] + dur)
-        else:
-            merged.append((act, dur))
-    seq = merged
-
     # Fix rounding so sum == 1440
     total = sum(d for _, d in seq)
     if total != 1440:

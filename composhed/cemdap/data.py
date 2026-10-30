@@ -21,7 +21,11 @@ the residual-time covariates seen in training match those at generation:
 
 from dataclasses import dataclass, field
 
-from composhed.common.tours import DayStructure, ExtractionCounters, extract_day_structure
+from composhed.common.tours import (
+    DayStructure,
+    ExtractionCounters,
+    extract_day_structure,
+)
 from composhed.data import LABEL_COLS
 
 POSITIONS = ["outbound", "inbound", "pre_tour", "post_tour", "nm_tour"]

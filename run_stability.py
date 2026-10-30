@@ -24,7 +24,6 @@ NEW_VARIANTS = {"cemdap", "daysim", "activitysim"}
 
 # Ablation presets (SPECIFICATION §8): name -> extra train arguments.
 ABLATIONS = {
-    "no-calibrate": ["--no-calibrate"],  # AB-1
     "independent-timing": ["--independent-timing"],  # AB-2
     "rescale": ["--consistency", "rescale"],  # AB-3
     "res15": ["--time-resolution", "15"],  # AB-4
@@ -33,7 +32,6 @@ ABLATIONS = {
     "no-segmentation": ["--no-segmentation"],  # AB-5
 }
 ABLATION_VARIANTS = {
-    "no-calibrate": NEW_VARIANTS | {"mdcev"},
     "independent-timing": NEW_VARIANTS,
     "rescale": NEW_VARIANTS,
     "res15": {"daysim", "activitysim"},
@@ -78,12 +76,12 @@ def _evaluate(run_dir: Path, target: str, variant: str, ablation: str, seed: int
               target_attributes: str | None = None, split_order: int | None = None) -> None:
     from composhed.evaluate import evaluate_to_frame
 
-    sliced = split_order is not None
+    sliced = bool(split_order)
     df = evaluate_to_frame(
         target, [str(run_dir / "synthetic_schedules.csv")], names=[variant],
         target_attributes=target_attributes if sliced else None,
         modelled_attributes=[str(run_dir / "synthetic_attributes.csv")] if sliced else None,
-        split_order=split_order,
+        split_order=split_order if sliced else None,
     )
     df.insert(0, "seed", seed)
     df.insert(0, "ablation", ablation or "none")
@@ -121,20 +119,18 @@ def _parse_runs(variants: str, ablations: str, skip_compositional: bool, skip_md
 @click.option("--variants", default=",".join(ALL_VARIANTS), show_default=True,
               help="Comma-separated variants to run")
 @click.option("--ablations", default="", show_default=True,
-              help="Comma-separated <variant>:<preset> ablation runs, e.g. cemdap:no-calibrate,daysim:res15. "
+              help="Comma-separated <variant>:<preset> ablation runs, e.g. cemdap:rescale,daysim:res15. "
                    f"Presets: {', '.join(sorted(ABLATIONS))}")
 @click.option("--mdcev-max-records", default=None, type=int)
 @click.option("--skip-compositional", is_flag=True, default=False, help="Alias: drop compositional from --variants")
 @click.option("--skip-mdcev", is_flag=True, default=False, help="Alias: drop mdcev from --variants")
 @click.option("--evaluate/--no-evaluate", default=True, show_default=True, help="Run acteval per run")
-@click.option("--split-order", default=None, type=int,
-              help="Evaluate per label slice (all LABEL_COLS) at this acteval split order; default unsliced")
-@click.option("--calibrate/--no-calibrate", default=True, show_default=True,
-              help="Calibrate every variant that has a calibration stage (--no-calibrate: AB-1 for all)")
+@click.option("--split-order", default=2, show_default=True, type=int,
+              help="Evaluate per label slice (all LABEL_COLS) at this acteval split order; 0 = unsliced")
 @click.option("--skip-existing", is_flag=True, default=False,
               help="Skip runs whose metrics.csv already exists")
 def main(attributes, schedules, target_schedules, seeds, out_dir, variants, ablations, mdcev_max_records,
-         skip_compositional, skip_mdcev, evaluate, split_order, calibrate, skip_existing) -> None:
+         skip_compositional, skip_mdcev, evaluate, split_order, skip_existing) -> None:
     seed_list = [int(s.strip()) for s in seeds.split(",")]
     runs = _parse_runs(variants, ablations, skip_compositional, skip_mdcev)
     target = target_schedules or schedules
@@ -144,8 +140,6 @@ def main(attributes, schedules, target_schedules, seeds, out_dir, variants, abla
     for variant, ablation in runs:
         name = f"{variant}__{ablation}" if ablation else variant
         extra = ABLATIONS.get(ablation, [])
-        if not calibrate and variant in ABLATION_VARIANTS["no-calibrate"] and "--no-calibrate" not in extra:
-            extra = extra + ["--no-calibrate"]
         for seed in seed_list:
             run_dir = base / name / f"seed_{seed}"
             if skip_existing and (run_dir / "metrics.csv").exists():

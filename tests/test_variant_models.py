@@ -15,7 +15,7 @@ def data(tmp_path_factory):
 
 
 def test_cemdap_models(data):
-    from composhed.cemdap.chain import CemdapChain, record_trace, trace_stats
+    from composhed.cemdap.chain import CemdapChain
     from composhed.cemdap.data import build_records
     from composhed.cemdap.models import COUNT_POSITIONS, CemdapModels
 
@@ -36,28 +36,40 @@ def test_cemdap_models(data):
     chain = CemdapChain(m)
     rows, trace = chain.generate(X[5], {"employment": "employed"}, rng, GenerationReport())
     assert sum(r["duration"] for r in rows) == 1440 and "stops" in trace
-    stats = trace_stats([record_trace(r) for r in records])
-    assert abs(sum(v for k, v in stats["work_participation"].items() if k != "__n__") - 1) < 1e-9
 
 
 def test_daysim_models(data):
     from composhed.common.report import GenerationReport
     from composhed.daysim.chain import DaysimChain
     from composhed.daysim.data import (
+        available,
         build_records,
         enumerate_patterns,
         feasible,
-        nearest_feasible,
+        is_student,
+        is_worker,
         pattern_label,
         pattern_tours,
     )
-    from composhed.daysim.models import DaysimModels
+    from composhed.daysim.models import (
+        DaysimModels,
+        pattern_b_mask,
+        pattern_inter_attrs,
+    )
 
     pats = enumerate_patterns()
     assert len(pats) == 1324 and len(set(pats)) == 1324  # DaySim's 2,080 less the work / school stop flags
-    # 4 tour purposes and a stop: infeasible; the lowest-priority tour flag goes first.
     v = (1, 0, 1, 1, 1, 0, 0) + (1, 0, 0, 0, 0)
-    assert not feasible(v[:7], v[7:]) and nearest_feasible(v) == (1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0)
+    assert not feasible(v[:7], v[7:])  # 4 tour purposes
+    # DaySim availability: work tours for workers only, school tours for students only.
+    work_day, school_day = (1, 0, 0, 0, 0, 0, 0) + (0,) * 5, (0, 1, 0, 0, 0, 0, 0) + (0,) * 5
+    assert not available(work_day, False, True) and available(work_day, True, False)
+    assert not available(school_day, True, False) and available(school_day, False, True)
+    assert is_worker({"employment": "employed"}) and is_student({"employment": "void"}, "SCHOOL")
+    # Two tour purposes share one person vector scaled by log(2); the tour component covers non-mandatory tours.
+    a = pattern_inter_attrs((1, 0, 0, 0, 1, 0, 0) + (1, 0, 0, 0, 0))
+    assert np.isclose(a[19], np.log(2)) and a[20] == 0 and a[21] == 1 and a[22] == 1
+    assert pattern_b_mask().sum() == 7 * 18 + 12 + 2 * 16 + 2 * 4
     assert pattern_tours((1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0), {"shop": 2}) == ["work", "education", "shop", "shop"]
     attr_df, sched, train_pids, _ = data
     records, _, _ = build_records(attr_df, sched, train_pids)
@@ -89,16 +101,21 @@ def test_activitysim_models_and_person_types(data):
     attr_df, sched, train_pids, _ = data
     records, _, _ = build_records(attr_df, sched, train_pids)
     X, names = encode_labels([r.labels for r in records])
-    m = AsimModels(n_min=10).fit(records, X, names)
+    m = AsimModels().fit(records, X, names)
     rng = np.random.default_rng(0)
-    cdap = m.cdap.sample(X, [r.ptype for r in records], rng)
-    assert set(cdap) <= set(m.cdap_classes)
-    # N persons cannot choose the zero-tour non-mandatory alternative.
-    avail = m._nm_avail(["N"])
+    env = m.person_env([r.labels for r in records])
+    assert set(m.cdap.sample(env, len(records), rng)) <= {"M", "N", "H"}
+    # prototype_mtc: non-working adults and retirees cannot have a mandatory day.
+    retired = m.person_env([{**records[0].labels, "age": "71-118", "employment": "retired"}])
+    assert m.cdap.predict_proba(retired, 1)[0, m.cdap.classes_.index("M")] == 0
+    # Without mandatory tours the zero-tour non-mandatory alternative is unavailable (spec row, -999).
+    seg = next(iter(m.nmtf))
     zero = [k for k, v in m.nm_vectors.items() if sum(v) == 0][0]
-    assert not avail[0, list(m.nm_vectors).index(zero)]
+    P = m.nmtf[seg].predict_proba(m.nm_env(m.person_env([records[0].labels]), [0], [0.0]), 1)
+    assert P[0, list(m.nm_vectors).index(zero)] == 0
     metrics = m.validate(records, X)
-    assert "ASIM-2 CDAP" in metrics and "ASIM-7 stop frequency" in metrics
+    assert "ASIM-2 CDAP" in metrics and any(k.startswith("ASIM-7 stop frequency") for k in metrics)
+    assert not any(r["missing"] == ["ptype"] for r in m.cdap.spec.dropped_rows)
     lk = Lookup(["a", "b"], min_count=2).fit([("x", 1), ("x", 1), ("y", 1)], ["a", "a", "b"])
     assert lk.probs(("x", 1))[0] == 1.0 and np.isclose(lk.probs(("z", 1)).sum(), 1.0)
     assert nm_label((1, 0, 0, 0, 1)) == "es1sh0om0od0so1"
@@ -106,14 +123,24 @@ def test_activitysim_models_and_person_types(data):
 
 def test_activitysim_ordering_and_trip_keys():
     from composhed.activitysim.data import AsimTour, mtf_tours, tour_order
-    from composhed.activitysim.models import departure_keys, stop_alt, stop_attrs
+    from composhed.activitysim.models import (
+        departure_keys,
+        stop_alt,
+        stop_segment,
+        tour_env,
+    )
     from composhed.common.periods import PeriodGrid
 
     assert mtf_tours("work_and_school", worker=True) == ["work", "school"]
     assert mtf_tours("work_and_school", worker=False) == ["school", "work"]
     assert tour_order("UNIV")[:2] == ["school", "work"]
     assert tour_order("FTW")[2:] == ["escort", "shopping", "othmaint", "othdiscr", "social"]
-    assert stop_attrs(stop_alt(2, 1)) == [0, 1, 0, 1, 0, 0, 0, 1, 0]
+    assert stop_alt(2, 5) == "2out_3in"
+    assert stop_segment("school", "UNIV") == "univ" and stop_segment("school", "SCHOOL") == "school"
+    from collections import Counter
+
+    e = tour_env(["social"], [7 * 60 + 30], [19 * 60 + 10], [Counter(work=1, social=1)], [False])
+    assert e["start"][0, 0] == 7 and e["end"][0, 0] == 19 and e["duration"][0, 0] == 12 and e["is_social"][0, 0]
     grid = PeriodGrid.with_early_bin(60)
     # 08:00 shop stop 20 min, work 08:20–17:00, two inbound stops 17:00–17:30 and 17:30–18:00.
     t = AsimTour("work", 480, 1080, outbound=[("shop", 480, 20)], inbound=[("escort", 1020, 30), ("shop", 1050, 30)],

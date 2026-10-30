@@ -7,7 +7,6 @@ from statsmodels.discrete.discrete_model import MNLogit
 from composhed.data import DISC_TYPES, LABEL_COLS, encode_features
 
 
-
 class ActivityTypeModel:
     """Three MNLogit models keyed by slot: '1', '2', '3+'."""
 
