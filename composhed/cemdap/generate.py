@@ -22,7 +22,7 @@ def generate(attributes: str, models: str, out_attributes: str, out_schedules: s
     bundle = load_bundle(models, VARIANT)
     cfg = bundle["config"]
     chain = CemdapChain(bundle["models"]["cemdap"], consistency=cfg["consistency"],
-                        max_resample=cfg["max_resample"], home_inter=cfg["home_inter"])
+                        max_resample=cfg["max_resample"])
     report = GenerationReport(variant=VARIANT)
     attr_rows, sched_rows = generate_population(chain, attributes, bundle["feature_names"], rng, report)
     write_outputs(attr_rows, sched_rows, out_attributes, out_schedules)

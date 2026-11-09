@@ -10,22 +10,35 @@ coefficient. ActivitySim's spec is ``activitysim.tod_spec`` (prototype_mtc
 
 Chooser-specific timetable terms (``dynamic``):
 
-* ``"asim"`` (ASIM-4/6): the alternative departs in the period a previous tour
-  ended / arrives in the period a later tour starts (ActivitySim
-  ``previous_tour_ends`` / ``previous_tour_begins``), the gap to the adjacent tour
-  before / after (``adjacent_window_before`` / ``_after``) and the look-ahead term
-  ``tours still to schedule / free hours left``;
+* ``"asim"`` (ASIM-4/6): ActivitySim's timetable rows, computed on its period
+  timetable (``asim_state``): a previously scheduled tour ends in the departure
+  period / begins in the arrival period (``previous_tour_ends`` /
+  ``previous_tour_begins``); whether a free period is adjacent before the
+  departure / after the arrival (``adjacent_window_before`` / ``_after`` > 0, as
+  the specs use them), once for the first of 2+ tours and once for later tours;
+  and tours still to schedule divided by the periods left free
+  (``remaining_periods_available``);
 * ``"daysim"`` (DAY-2/4): log of the free minutes in the arrival and departure
   periods, adjacent free hours before arrival / after departure for later tours,
   stop purposes still to place / (1 + adjacent free hours), and tours still to
   schedule / (1 + free hours before and after), capped at 0.3 (WorkTourTimeModel
   terms 91–100).
 
-Availability comes from ``TimeWindow.period_availability_mask``. A chosen pair is
-turned into minutes by drawing each minute uniformly from the free minutes of
-its period inside the window that made the pair available, as DaySim's
-``TimeWindow.GetMinuteSpan`` does (ActivitySim stops at periods). Placed tours
-never overlap and keep ``buffer`` minutes of home between them.
+A chosen pair is turned into minutes in one of two ways, matching the source's
+precision:
+
+* minutes (DaySim): each minute is drawn uniformly from the free minutes of its
+  period inside the window that made the pair available, as DaySim's
+  ``TimeWindow.GetMinuteSpan`` does. Availability comes from
+  ``TimeWindow.period_availability_mask``; placed tours never overlap and keep
+  ``buffer`` minutes of home between them;
+* ``points=True`` (ActivitySim, which schedules in periods and stops there):
+  each period is written at one minute, its midpoint, so a tour starting and
+  ending in one period lasts zero minutes. A pair is available when its interval
+  overlaps no placed tour; as in ActivitySim's timetable, a tour may start in the
+  period another ends. ``min_start`` (minutes) also removes pairs starting in an
+  earlier period, for the specs' "subsequent tour must start after previous tour
+  ends" rows.
 
 ``IndependentTiming`` is the AB-2 ablation (CompoShed-style KDE start plus an
 independent log-normal duration) and ``layout_rescale`` the AB-3 ablation.
@@ -39,12 +52,14 @@ from scipy.stats import gaussian_kde
 
 from composhed.common.choice import ConditionalLogit
 from composhed.common.lognormal import LogNormalDuration
-from composhed.common.periods import PeriodGrid
+from composhed.common.periods import DAY, PeriodGrid
 from composhed.common.timewindow import TimeWindow
 
 DYN_NAMES = {
-    "asim": ["prev_tour_ends_in_start_period", "next_tour_starts_in_end_period", "remaining_tours_per_free_hour",
-             "gap_to_previous_tour", "gap_to_next_tour"],
+    "asim": ["previous_tour_ends_in_departure_period", "previous_tour_begins_in_arrival_period",
+             "adjacent_window_before_first_of_2plus", "adjacent_window_after_first_of_2plus",
+             "adjacent_window_before_second_plus", "adjacent_window_after_second_plus",
+             "tours_to_schedule_per_remaining_period"],
     "daysim": ["log_free_minutes_arrival_period", "log_free_minutes_departure_period",
                "adjacent_hours_before_later_tour", "adjacent_hours_after_later_tour",
                "stops_left_per_adjacent_hour_before", "stops_left_per_adjacent_hour_after",
@@ -92,17 +107,41 @@ def tw_state(tw: TimeWindow, n_remaining: int = 0, later: bool = False, stops_le
     return tw.busy_intervals(), int(n_remaining), tw.remaining(), bool(later), int(stops_left)
 
 
+# ActivitySim timetable period states (core/timetable.py).
+I_EMPTY, I_START, I_END, I_START_END, I_MIDDLE = 0, 2, 4, 6, 7
+
+
+def asim_state(tw: TimeWindow, grid: PeriodGrid, first: bool = False, second: bool = False,
+               numerator: float = 0.0) -> tuple:
+    """ActivitySim timetable row of the tours reserved in ``tw`` (one state per period, as ``assign`` builds it by
+    OR-ing tour footprints), with the scheduling context of the tour being chosen: first of 2+ tours, a later
+    tour, and the numerator of the tours-to-schedule term."""
+    w = np.zeros(grid.n, dtype=np.int8)
+    for s, e in tw.tours:
+        ps = int(grid.period_of(min(s, DAY - 1)))
+        pe = ps if e == s else int(grid.end_period_of(e))
+        if pe > ps:
+            w[ps] |= I_START
+            w[ps + 1:pe] |= I_MIDDLE
+            w[pe] |= I_END
+        else:
+            w[ps] |= I_START_END
+    return w, bool(first), bool(second), float(numerator)
+
+
 class TourTOD:
-    def __init__(self, grid: PeriodGrid, spec_fn, buffer: int = 10, l2: float = 1e-3, maxiter: int = 300,
-                 dynamic: str | None = None, **spec_kwargs) -> None:
+    def __init__(self, grid: PeriodGrid, spec_fn, buffer: int = 0, l2: float = 1e-3, maxiter: int = 300,
+                 dynamic: str | None = None, points: bool = False, **spec_kwargs) -> None:
         self.grid = grid
         self.buffer = buffer
+        self.points = points
         self.dynamic = dynamic
         self.ps, self.pe = grid.pairs()
         self.start_lo, self.start_hi = grid.lo(self.ps), grid.hi(self.ps)
         self.end_lo, self.end_hi = grid.lo(self.pe), grid.hi(self.pe)
         self.mid_s = (self.start_lo + self.start_hi) / 2.0
         self.mid_e = (self.end_lo + self.end_hi) / 2.0
+        self.pt_s, self.pt_e = grid.points()[self.ps], grid.points()[self.pe]
         self.spec: TodSpec = spec_fn(grid, self.ps, self.pe, **spec_kwargs)
         G, mask = self.spec.matrices()
         J = len(self.ps)
@@ -124,10 +163,16 @@ class TourTOD:
     def alt_of(self, start: int, end: int) -> int:
         return self.alt_index[(int(self.grid.period_of(start)), int(self.grid.end_period_of(end)))]
 
-    def mask(self, tw: TimeWindow, min_duration: int = 1) -> np.ndarray:
-        return tw.period_availability_mask(
-            self.start_lo, self.start_hi, self.end_lo, self.end_hi, self.buffer, min_duration
-        )
+    def mask(self, tw: TimeWindow, min_duration: int = 1, min_start: float | None = None) -> np.ndarray:
+        if self.points:
+            m = point_mask(tw, self.pt_s, self.pt_e)
+        else:
+            m = tw.period_availability_mask(
+                self.start_lo, self.start_hi, self.end_lo, self.end_hi, self.buffer, min_duration
+            )
+        if min_start is not None:
+            m &= self.ps >= self.grid.period_of(min_start)
+        return m
 
     # ---- chooser-specific timetable terms -------------------------------------
     def dyn_fn(self, states: list[tuple]):
@@ -135,6 +180,8 @@ class TourTOD:
         kind = getattr(self, "dynamic", None)
         if not kind:
             return None
+        if kind == "asim":
+            return self._dyn_asim(states)
         R = max([len(st[0]) for st in states] + [1])
         S = np.full((len(states), R), np.nan)
         E = np.full((len(states), R), np.nan)
@@ -142,31 +189,43 @@ class TourTOD:
             for r, (a, b) in enumerate(st[0]):
                 S[i, r], E[i, r] = a, b
         nrem = np.array([st[1] for st in states], dtype=float)
-        free = np.array([st[2] for st in states], dtype=float)
         later = np.array([float(st[3]) if len(st) > 3 else 0.0 for st in states])
         nstops = np.array([float(st[4]) if len(st) > 4 else 0.0 for st in states])
-        if kind == "asim":
-            return self._dyn_asim(S, E, nrem, free)
         return self._dyn_daysim(S, E, nrem, later, nstops)
 
-    def _dyn_asim(self, S, E, nrem, free):
-        valid = ~np.isnan(S)
-        startp = np.where(valid, self.grid.period_of(np.nan_to_num(S)), -1)
-        endp = np.where(valid, self.grid.end_period_of(np.nan_to_num(E, nan=1.0)), -1)
-        ps, pe, ms, me = self.ps, self.pe, self.mid_s, self.mid_e
-        dur = np.maximum(me - ms, 0.0)
+    def state(self, tw: TimeWindow, **kw) -> tuple:
+        """Timetable state for the dynamic terms (``asim_state`` or ``tw_state``)."""
+        if self.dynamic == "asim":
+            return asim_state(tw, self.grid, **kw)
+        return tw_state(tw, **kw)
+
+    def _dyn_asim(self, states):
+        W = np.stack([st[0] for st in states]) if states else np.zeros((0, self.grid.n), dtype=np.int8)
+        first = np.array([st[1] for st in states], dtype=float)
+        second = np.array([st[2] for st in states], dtype=float)
+        num = np.array([st[3] for st in states], dtype=float)
+        n, P = W.shape
+        free = W != I_MIDDLE
+        # Free periods adjacent before / after each period, up to a period in the middle of a tour or the day edge;
+        # the specs use whether there is one (``_adjacent_window_before@tt.adjacent_window_before(...) > 0``).
+        adj_b, adj_a = np.zeros((n, P)), np.zeros((n, P))
+        for p in range(1, P):
+            adj_b[:, p] = np.where(free[:, p - 1], adj_b[:, p - 1] + 1, 0)
+        for p in range(P - 2, -1, -1):
+            adj_a[:, p] = np.where(free[:, p + 1], adj_a[:, p + 1] + 1, 0)
+        ends = np.isin(W, (I_END, I_START_END))
+        begins = np.isin(W, (I_START, I_START_END))
+        n_free = free.sum(axis=1).astype(float)
+        ps, pe = self.ps, self.pe
+        interior = np.maximum(pe - ps - 1, 0)
 
         def dyn(s: int, e: int) -> np.ndarray:
-            v = valid[s:e, None, :]
-            prev = (ps[None, :, None] == endp[s:e, None, :]).any(axis=2)
-            nxt = (pe[None, :, None] == startp[s:e, None, :]).any(axis=2)
-            hours_left = np.maximum((free[s:e, None] - dur[None, :]) / 60.0, 0.5)
-            look = nrem[s:e, None] / hours_left
-            Eb = np.where(v & (E[s:e, None, :] <= ms[None, :, None]), E[s:e, None, :], -np.inf).max(axis=2)
-            Sa = np.where(v & (S[s:e, None, :] >= me[None, :, None]), S[s:e, None, :], np.inf).min(axis=2)
-            gap_b = np.where(np.isfinite(Eb), (ms[None, :] - Eb) / 1440.0, 0.0)
-            gap_a = np.where(np.isfinite(Sa), (Sa - me[None, :]) / 1440.0, 0.0)
-            return np.stack([prev, nxt, look, gap_b, gap_a], axis=2).astype(float)
+            ab, aa = adj_b[s:e][:, ps] > 0, adj_a[s:e][:, pe] > 0
+            f, sec = first[s:e, None], second[s:e, None]
+            # ActivitySim divides by the periods left; a tour leaving none gets 1 (it would divide by zero).
+            remaining = np.maximum(n_free[s:e, None] - interior[None, :], 1.0)
+            return np.stack([ends[s:e][:, ps], begins[s:e][:, pe], f * ab, f * aa, sec * ab, sec * aa,
+                             num[s:e, None] / remaining], axis=2).astype(float)
 
         return dyn
 
@@ -259,25 +318,27 @@ class TourTOD:
     # ---- generation ------------------------------------------------------------
     def sample(
         self, z: np.ndarray, tw: TimeWindow, rng: np.random.Generator, min_duration: int = 1,
-        use_mask: bool = True, n_remaining: int = 0, later: bool = False, stops_left: int = 0,
+        use_mask: bool = True, min_start: float | None = None, **state_kw,
     ) -> tuple[int, int] | None:
         """Sample an interval [start, end) in minutes; None if no pair is available.
 
-        ``n_remaining``: tours still to schedule after this one; ``later``: not the
-        first tour scheduled; ``stops_left``: stop purposes still to place (timetable terms).
+        ``state_kw``: the tour's context for the timetable terms (``tw_state`` / ``asim_state`` arguments).
         """
         self._sync_offsets()
-        avail = self.mask(tw, min_duration) if use_mask else np.ones(len(self.ps), dtype=bool)
+        avail = self.mask(tw, min_duration, min_start) if use_mask else np.ones(len(self.ps), dtype=bool)
         if not avail.any():
             return None
-        dyn = self.dyn_fn([tw_state(tw, n_remaining, later, stops_left)])
+        dyn = self.dyn_fn([self.state(tw, **state_kw)])
         j = int(self.clogit.sample(z[None, :], rng, avail[None, :], dyn)[0])
         if j < 0:
             return None
         return self.realise(j, tw if use_mask else TimeWindow(), rng, min_duration)
 
     def realise(self, j: int, tw: TimeWindow, rng: np.random.Generator, min_duration: int = 1) -> tuple[int, int] | None:
-        """Minutes for pair ``j``: start uniform over its feasible minutes, then end uniform given the start."""
+        """Minutes for pair ``j``: the period points, or start uniform over its feasible minutes and then end
+        uniform given the start."""
+        if self.points:
+            return int(self.pt_s[j]), int(self.pt_e[j])
         sl, sh, el, eh = (int(v[j]) for v in (self.start_lo, self.start_hi, self.end_lo, self.end_hi))
         for a, b in tw.usable_windows(self.buffer):
             s_min, e_max = max(sl, a), min(eh, b)
@@ -292,6 +353,19 @@ class TourTOD:
             e = int(rng.integers(e_lo, e_max + 1))
             return s, e
         return None
+
+
+def point_mask(tw: TimeWindow, s: np.ndarray, e: np.ndarray) -> np.ndarray:
+    """Intervals [s, e) of whole minutes that overlap no reserved tour and span no zero-length one; a zero-length
+    one must not fall strictly inside a reserved tour."""
+    busy = tw.busy
+    cs = np.concatenate([[0], np.cumsum(busy)])
+    s, e = np.asarray(s, dtype=int), np.asarray(e, dtype=int)
+    inside = busy[s] & busy[np.maximum(s - 1, 0)] & (s > 0)
+    free = cs[e] == cs[s]
+    for p in tw.points:
+        free &= ~((s < p) & (p < e))
+    return np.where(e > s, free, ~inside)
 
 
 class IndependentTiming:

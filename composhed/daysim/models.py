@@ -2,10 +2,10 @@
 
 | Component | DaySim model | Model here |
 |---|---|---|
-| day pattern: which tour purposes and which stop purposes the day has | ``IndividualPersonDayPatternModel`` | ``AltAttrMNL`` over all 1,324 feasible patterns with DaySim's terms: tour and stop constants; tour–stop, tour–tour, stop–stop and tour-count × stop-count constants; the person terms on each purpose's presence; one person vector × log(tours) for 2+ tour purposes and one × log(stops) for 2+ stop purposes; the tour and stop components; logsum (accessibility) terms; DaySim's worker / student availability |
+| day pattern: which tour purposes and which stop purposes the day has | ``IndividualPersonDayPatternModel`` | ``AltAttrMNL`` over all 2,080 feasible patterns with DaySim's terms: tour and stop constants; tour–stop, tour–tour, stop–stop and tour-count × stop-count constants; the person terms on each purpose's presence; one person vector × log(tours) for 2+ tour purposes and one × log(stops) for 2+ stop purposes; the tour and stop components; logsum (accessibility) terms; DaySim's worker / student availability |
 | exact number of tours per purpose (1, 2, 3+) | ``PersonExactNumberOfToursModel`` | ``SpecLogit`` per purpose: the person terms and the day's tours and stops on 2 and 3+ (shared), constants and logsum per alternative |
 | tour time: arrival and departure at the primary destination | ``WorkTourTimeModel`` / ``SchoolTourTimeModel`` / ``OtherHomeBasedTourTimeModel`` | ``TourTOD`` over half-hour period pairs with the DaySim spec (``tod_spec``) and time-window terms |
-| intermediate stop generation (next stop's purpose, or none) | ``IntermediateStopGenerationModel`` | ``SpecLogit`` with DaySim's terms, each on the stop purposes the source gives it; purposes available only if the pattern has them |
+| intermediate stop generation (next stop's purpose, or none) | ``IntermediateStopGenerationModel`` | ``SpecLogit`` with DaySim's terms, each on the stop purposes the source gives it; as DaySim, a purpose is available only if the pattern has it and the tour allows it (``data.stop_allowed``) |
 | trip time (period of each stop's outer boundary) | ``TripTimeModel`` | ``TripTimeModel`` below |
 | AB-2 timing | — | ``IndependentTiming`` per group |
 
@@ -31,6 +31,7 @@ from composhed.daysim.data import (
     DaysimRecord,
     available,
     enumerate_patterns,
+    stop_allowed,
     is_student,
     is_worker,
     pattern_label,
@@ -52,6 +53,9 @@ DAYSIM_NAME = {"work": "work", "education": "school", "escort": "escort", "other
 
 
 # ---- day pattern -------------------------------------------------------------------------------------
+# DaySim's tour–stop pairs: every stop purpose but social / recreation (last); work and school stops (first two)
+# only with work and school tours.
+TOUR_STOP_PAIRS = [(i, j) for i in range(NT) for j in range(NT - 1) if not (i > 1 and j <= 1)]
 PATTERN_X = PERSON_TERMS + ["mixed_density_child_5_15", "saturday", "sunday"]
 COMPONENT_TERMS = ["cars_per_driver", "mixed_density", "mixed_density_child_5_15", "logsum"]  # terms 1401–1406
 
@@ -64,10 +68,11 @@ def pattern_x(dv: DaysimVars, labels: dict, ptype: str) -> np.ndarray:
 
 def pattern_attrs(vec: tuple) -> list[float]:
     """Constants of a pattern: tour and stop ASCs (100p, 100p+1), tour–stop (1000+; DaySim pairs every tour purpose
-    with every stop purpose but social/recreation), tour–tour (1100+), stop–stop (1200+), tours × stops (1300+)."""
+    with every stop purpose but social/recreation, work and school stops only with work and school tours), tour–tour
+    (1100+), stop–stop (1200+), tours × stops (1300+)."""
     tours, stops = vec[:NT], vec[NT:]
     nt, ns = sum(tours), min(sum(stops), 3)
-    tour_stop = [float(t and s) for t in tours for s in stops[:-1]]
+    tour_stop = [float(tours[i] and stops[j]) for i, j in TOUR_STOP_PAIRS]
     tour_tour = [float(tours[i] and tours[j]) for i in range(NT) for j in range(i + 1, NT)]
     stop_stop = [float(stops[i] and stops[j]) for i in range(len(stops)) for j in range(i + 1, len(stops))]
     counts = [float(nt == a and ns == b) for a in range(1, 4) for b in range(1, 4)]
@@ -75,22 +80,22 @@ def pattern_attrs(vec: tuple) -> list[float]:
 
 
 PATTERN_ATTR_NAMES = ([f"tour_{p}" for p in TOUR_PURPOSES] + [f"stop_{p}" for p in STOP_PURPOSES]
-                      + [f"tour_{p}*stop_{q}" for p in TOUR_PURPOSES for q in STOP_PURPOSES[:-1]]
+                      + [f"tour_{TOUR_PURPOSES[i]}*stop_{STOP_PURPOSES[j]}" for i, j in TOUR_STOP_PAIRS]
                       + [f"tour_{TOUR_PURPOSES[i]}*tour_{TOUR_PURPOSES[j]}" for i in range(NT) for j in range(i + 1, NT)]
-                      + [f"stop_{STOP_PURPOSES[i]}*stop_{STOP_PURPOSES[j]}" for i in range(5) for j in range(i + 1, 5)]
+                      + [f"stop_{STOP_PURPOSES[i]}*stop_{STOP_PURPOSES[j]}" for i in range(NT) for j in range(i + 1, NT)]
                       + [f"{a}tours_{b}stops" for a in range(1, 4) for b in range(1, 4)])
 
 
 def pattern_inter_attrs(vec: tuple) -> list[float]:
     """What the person variables act on: each purpose's presence (tour or stop; DaySim components 1–7), each tour and
     stop (logsum terms 100p+29 / 100p+31), log(tour purposes) and log(stop purposes) when 2+ (the shared multi-tour
-    and multi-stop components), any non-mandatory tour and any stop (the tour and stop components)."""
+    and multi-stop components), any non-mandatory tour and any non-mandatory stop (the tour and stop components)."""
     tours, stops = vec[:NT], vec[NT:]
-    present = [float(t or (p in STOP_PURPOSES and stops[STOP_PURPOSES.index(p)]))
-               for p, t in zip(TOUR_PURPOSES, tours)]
+    present = [float(t or s) for t, s in zip(tours, stops)]
     nt, ns = sum(tours), sum(stops)
     return (present + [float(t) for t in tours] + [float(s) for s in stops]
-            + [np.log(nt) if nt > 1 else 0.0, np.log(ns) if ns > 1 else 0.0, float(sum(tours[2:]) > 0), float(ns > 0)])
+            + [np.log(nt) if nt > 1 else 0.0, np.log(ns) if ns > 1 else 0.0, float(sum(tours[2:]) > 0),
+               float(sum(stops[2:]) > 0)])
 
 
 PATTERN_INTER_NAMES = ([f"present_{p}" for p in TOUR_PURPOSES] + [f"tour_{p}" for p in TOUR_PURPOSES]
@@ -168,7 +173,8 @@ TOD_BANDS = {"t7_9": (7, 9), "t9_11": (9, 11), "t11_13": (11, 13), "t13_15": (13
 TOUR_FLAGS = [f"{DAYSIM_NAME[p]}_tour" for p in TOUR_PURPOSES]
 STOPGEN_VARS = (["one_trip", "two_trips", "three_trips", "four_trips", "five_trips", "origin_half", "dest_half",
                  "home_based_tours", "simulated_tours", "before_mandatory", "remaining_tours", "duration"]
-                + TOUR_FLAGS + [f"sim_{DAYSIM_NAME[q]}_stops" for q in STOP_PURPOSES] + list(TOD_BANDS)
+                + TOUR_FLAGS + [f"sim_{DAYSIM_NAME[q]}_stops" for q in STOP_PURPOSES] + ["sim_work_stops_flag"]
+                + list(TOD_BANDS)
                 + ["t23_7", "adult_male", "retired", "driving_age_student", "nonworking_adult", "child_5_15",
                    "child_under_5", "saturday", "sunday"])
 
@@ -187,6 +193,7 @@ def stopgen_vars(person: dict, tour_purpose: str, outbound: bool, k: int, window
           "remaining_tours": float(n_tours - rank - 1), "duration": float(window_hours)}
     v |= {f"{DAYSIM_NAME[p]}_tour": float(tour_purpose == p) for p in TOUR_PURPOSES}
     v |= {f"sim_{DAYSIM_NAME[q]}_stops": float(sim_stops[q]) for q in STOP_PURPOSES}
+    v["sim_work_stops_flag"] = float(sim_stops["work"] > 0)
     v |= {name: float(a <= h < b) for name, (a, b) in TOD_BANDS.items()}
     v["t23_7"] = float(h >= 23 or h < 3)  # DaySim's day starts at 03:00: "from 11 PM" covers 23:00–03:00
     v |= {k_: person[k_] for k_ in ("adult_male", "retired", "driving_age_student", "nonworking_adult", "child_5_15",
@@ -197,7 +204,8 @@ def stopgen_vars(person: dict, tour_purpose: str, outbound: bool, k: int, window
 def stopgen_spec() -> Spec:
     """``IntermediateStopGenerationModel`` terms, each on the alternatives DaySim gives it (term numbers in labels).
     Dropped: transit / walk / bike / HOV tour mode, not-home-based tours, parcel connectivity, households with
-    children, one-person households, part-time workers (no NTS counterpart)."""
+    children, one-person households, part-time workers (no NTS counterpart). Saturday and Sunday are added on every
+    stop purpose."""
     spec = Spec(alternatives=STOPGEN_CLASSES, rows=[])
     for i, n in enumerate(["two_trips", "three_trips", "four_trips", "five_trips"]):
         spec.add(f"{1 + i}", f"{n} * origin_half", {NONE: f"none_{n}_origin"})
@@ -205,6 +213,25 @@ def stopgen_spec() -> Spec:
     for term, var in ((9, "home_based_tours"), (10, "simulated_tours"), (12, "before_mandatory"), (40, "school_tour")):
         spec.add(str(term), var, {NONE: f"none_{var}"})
     ws = "work_tour + school_tour"
+    # Work and school stops (terms 33/34, 82/83, 89/90, 96, 103/104, 110/111, 131, 138, 175, 237).
+    spec.add("work:33", ws, {"work": "work_work_tour_or_school_tour"})
+    spec.add("work:82", "origin_half", {"work": "work_origin_half"})
+    spec.add("work:89", "sim_work_stops", {"work": "work_sim_work_stops"})
+    spec.add("work:96", "sim_work_stops_flag", {"work": "work_sim_work_stops_flag"})
+    spec.add("work:103", "remaining_tours", {"work": "work_remaining_tours"})
+    spec.add("work:110", "duration", {"work": "work_duration"})
+    spec.add("work:131", "t9_11 + t11_13 + t13_15 + t15_17", {"work": "work_tod_t9_11_or_t11_13_or_t13_15_or_t15_17"})
+    spec.add("work:175", "adult_male", {"work": "work_adult_male"})
+    spec.add("school:34", ws, {"education": "school_work_tour_or_school_tour"})
+    spec.add("school:83", "origin_half", {"education": "school_origin_half"})
+    spec.add("school:90", "sim_school_stops", {"education": "school_sim_school_stops"})
+    spec.add("school:104", "remaining_tours", {"education": "school_remaining_tours"})
+    spec.add("school:111", "duration", {"education": "school_duration"})
+    spec.add("school:138", "t7_9 + t19_21 + t21_23 + t23_7", {"education": "school_tod_t7_9_or_t19_21_or_t21_23_or_t23_7"})
+    spec.add("school:237", "one_trip", {"education": "school_one_trip"})
+    for q, d in (("work", "work"), ("education", "school")):
+        for day in ("saturday", "sunday"):
+            spec.add(f"{q}:{day}", day, {q: f"{d}_{day}"})
     day_vars = {"escort": "escort", "other": "pb", "shop": "shop", "visit": "meal", "leisure": "social"}
     tour_terms = {  # stop purpose -> tour-purpose flags it has terms for
         "escort": [ws, "escort_tour"],
@@ -220,7 +247,7 @@ def stopgen_spec() -> Spec:
         "visit": ["t7_9 + t23_7", "t11_13 + t13_15", "t19_21"],
         "leisure": ["t7_9 + t23_7", "t11_13 + t13_15 + t15_17"],
     }
-    for q in STOP_PURPOSES:
+    for q in day_vars:
         d = day_vars[q]
         for f in tour_terms[q]:
             spec.add(f"{q}:{f}", f, {q: f"{d}_{f.replace(' + ', '_or_')}"})
@@ -234,8 +261,6 @@ def stopgen_spec() -> Spec:
     spec.add("visit:one_trip", "one_trip", {"visit": "meal_one_trip"})
     spec.add("visit:ptype_a", "retired + driving_age_student", {"visit": "meal_pt_retired_driving"})
     spec.add("visit:ptype_b", "nonworking_adult + child_5_15 + child_under_5", {"visit": "meal_nonworker_children"})
-    spec.add("work stop: adult male", "adult_male", {})  # term 175 is on work stops, which do not exist here
-    spec.rows = [r for r in spec.rows if r.cells]
     return spec
 
 
@@ -250,7 +275,7 @@ IN_GROUPS = [(0, 7), (7, 10), (10, 13), (13, 15), (15, 16), (16, 17), (17, 18), 
 TT_DUR = [(0, 1), (1, 2), (2, 3), (3, 5), (5, 7), (7, 9), (9, 12), (12, 14), (14, 18), (18, 99)]
 TT_FLAGS = ([f"ptype_{p}" for p in PERSON_TYPES if p != "FTW"]
             + ["outbound", "work_outbound", "work_inbound", "nonwork_inbound"]
-            + [f"stop_{p}" for p in STOP_PURPOSES if p != "leisure"] + ["saturday", "sunday"])
+            + [f"stop_{p}" for p in STOP_PURPOSES if p != "work"] + ["saturday", "sunday"])  # work stops: reference
 TT_DYN = ([f"duration_{a}_{b}" for a, b in TT_DUR[1:]] + [f"{f}*duration" for f in TT_FLAGS]
           + ["log_period_fraction_free", "trip_remaining_per_adjacent_hour", "tours_left_per_free_hour"])
 
@@ -388,7 +413,7 @@ def half_tour_stops(t, outbound: bool) -> list[tuple[str, int, int]]:
 
 
 class DaysimModels:
-    def __init__(self, time_resolution: int = 30, home_inter: int = 1, tod_maxiter: int = 200) -> None:
+    def __init__(self, time_resolution: int = 30, home_inter: int = 0, tod_maxiter: int = 200) -> None:
         self.time_resolution = time_resolution
         self.home_inter = home_inter
         self.tod_maxiter = tod_maxiter
@@ -433,7 +458,8 @@ class DaysimModels:
                         wh = ((anchor - lo) if outbound else (hi - anchor)) / 60.0
                         sg["rows"].append(stopgen_vars(person, t.purpose, outbound, k, wh, anchor0, n, rank, sim_stops))
                         sg["y"].append(choice)
-                        sg["avail"].append([c == NONE or c == choice or c in pattern_stops for c in STOPGEN_CLASSES])
+                        sg["avail"].append([c == NONE or (c in pattern_stops and stop_allowed(t.purpose, c))
+                                            for c in STOPGEN_CLASSES])
                         if k == len(stops):
                             break
                         purpose, inner, outer = stops[k]

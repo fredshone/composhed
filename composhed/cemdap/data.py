@@ -1,22 +1,31 @@
 """CEMDAP training records (SPECIFICATION §5.4).
 
-Each person-day is converted with ``extract_day_structure(collapse_mandatory_tours=True)``
-into the CEMDAP pattern: an optional single mandatory block with outbound and
-inbound stops, separate non-mandatory tours before / after it, and home stays.
-Non-mandatory tours are ordered lists of stops (no primary activity).
+Each person-day is converted with ``extract_day_structure(collapse_mandatory_tours=True,
+mandatory="work_based")`` into CEMDAP's worker pattern: an optional single
+work-based period (work or school, from its start to its end) with commute stops
+on the way there (outbound) and back (inbound), work-based tours inside it,
+separate tours before / after it, and home stays. Non-mandatory tours are
+ordered lists of stops (no primary activity).
 
 The *generation order* used by ``chain.CemdapChain`` is reproduced here so that
 the residual-time covariates seen in training match those at generation:
 
-* mandatory day, before side (budget = start − 1): outbound stops, then each
+* mandatory day, before side (budget = start): outbound stops, then each
   pre-tour's stops followed by the home stay after it; the first home stay is
   the residual.
-* mandatory day, after side (budget = 1440 − end − 1): inbound stops, then for
+* mandatory day, after side (budget = 1440 − end): inbound stops, then for
   each post-tour the home stay before it and its stops; the last home stay is
   the residual.
-* non-mandatory day: first home stay (departure), then (budget = 1440 − departure − 1) each
+* mandatory day, work-based period (budget = its duration): for each
+  work-based tour the work stay before it and its stops; the last work stay is
+  the residual.
+* non-mandatory day: first home stay (departure), then (budget = 1440 − departure) each
   tour's stops followed by the home stay after it (except the last); the last
   home stay is the residual.
+
+Time is minutes since the start of the NTS day (00:00). CEMDAP's own day starts
+at 03:00; what matters here is that every time is measured from the start of
+the day, as in CEMDAP.
 """
 
 from dataclasses import dataclass, field
@@ -28,13 +37,12 @@ from composhed.common.tours import (
 )
 from composhed.data import LABEL_COLS
 
-POSITIONS = ["outbound", "inbound", "pre_tour", "post_tour", "nm_tour"]
-HOME_SIDES = ["before", "after", "nm"]
+POSITIONS = ["outbound", "inbound", "pre_tour", "post_tour", "nm_tour", "wb_tour"]
+HOME_SIDES = ["before", "after", "nm", "work"]  # "work": the work stay before a work-based tour
 MAX_POSITION_COUNT = 3
 MAX_NM_TOURS = 4
 MAX_TOUR_STOPS = 4
 DAY = 1440
-MAND_START_ORIGIN = 180  # CEMDAP measures work start from 03:00
 
 
 @dataclass
@@ -48,6 +56,7 @@ class CemdapRecord:
     n_in: int = 0
     n_pre: int = 0
     n_post: int = 0
+    n_wb: int = 0
     n_nm_tours: int = 0
     tour_sizes: list[tuple[str, int, int]] = field(default_factory=list)  # (position, tour index, n stops)
     stops: list[dict] = field(default_factory=list)  # purpose/duration/position/index/residual
@@ -72,9 +81,10 @@ def build_record(pid, labels: dict, day: DayStructure) -> CemdapRecord:
         rec.n_out, rec.n_in = len(mt.outbound), len(mt.inbound)
         pre, post = day.tours[:m], day.tours[m + 1:]
         rec.n_pre, rec.n_post = len(pre), len(post)
+        rec.n_wb = len(mt.work_based)
         mand_start = mt.primary_start
         # Before side: outbound stops, then pre tours each followed by their home stay.
-        resid = mand_start - 1
+        resid = mand_start
         for k, s in enumerate(mt.outbound):
             rec.stops.append(_stop(s.act, s.duration, "outbound", k, resid))
             resid -= s.duration
@@ -87,7 +97,7 @@ def build_record(pid, labels: dict, day: DayStructure) -> CemdapRecord:
             rec.home_stays.append({"side": "before", "duration": int(h), "residual": float(resid)})
             resid -= h
         # After side: inbound stops, then each post tour preceded by its home stay.
-        resid = DAY - mand_start - mt.primary_duration - 1
+        resid = DAY - mand_start - mt.primary_duration
         for k, s in enumerate(mt.inbound):
             rec.stops.append(_stop(s.act, s.duration, "inbound", k, resid))
             resid -= s.duration
@@ -99,11 +109,21 @@ def build_record(pid, labels: dict, day: DayStructure) -> CemdapRecord:
             for k, s in enumerate(_tour_stops(t)):
                 rec.stops.append(_stop(s[0], s[1], "post_tour", k, resid))
                 resid -= s[1]
+        # Work-based period: each work-based tour preceded by its work stay.
+        resid = mt.primary_duration
+        for ti, run in enumerate(mt.work_based):
+            w = mt.work_stays[ti]
+            rec.home_stays.append({"side": "work", "duration": int(w), "residual": float(resid)})
+            resid -= w
+            rec.tour_sizes.append(("wb_tour", ti, len(run)))
+            for k, s in enumerate(run):
+                rec.stops.append(_stop(s.act, s.duration, "wb_tour", k, resid))
+                resid -= s.duration
     else:
         rec.n_nm_tours = len(day.tours)
         if day.tours:
             rec.first_departure = int(day.home_stays[0])
-        resid = DAY - 1 - (day.home_stays[0] if day.tours else 0)
+        resid = DAY - (day.home_stays[0] if day.tours else 0)
         for ti, t in enumerate(day.tours):
             rec.tour_sizes.append(("nm_tour", ti, len(t.stops) + 1))
             for k, s in enumerate(_tour_stops(t)):
@@ -130,6 +150,7 @@ def build_records(attr_df, sched_by_pid: dict, pids: set | None = None) -> tuple
         pid = row["pid"]
         if pid not in sched_by_pid or (pids is not None and pid not in pids):
             continue
-        day = extract_day_structure(sched_by_pid[pid], collapse_mandatory_tours=True, counters=counters)
+        day = extract_day_structure(sched_by_pid[pid], collapse_mandatory_tours=True, counters=counters,
+                                    mandatory="work_based")
         records.append(build_record(pid, {k: row[k] for k in LABEL_COLS}, day))
     return records, counters

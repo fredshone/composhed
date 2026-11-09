@@ -7,21 +7,29 @@ Rules (documented in docs/tour_rules.md):
 * Primary activity (SR-8), ``primary_rule="priority"``: work > education > the
   longest discretionary activity (ties: earliest). ``"longest"`` picks the longest
   activity of any type.
-* Fragmented mandatory activity (SR-9), as CompoShed ``build_training_dataset``:
-  all mandatory episodes in a tour are merged into one block that starts at the
-  first mandatory start, lasts the *sum* of the mandatory episode durations and is
-  typed by the first mandatory episode. Discretionary activities before the first
-  mandatory start are outbound stops; all later ones (including those inside the
-  block) are inbound stops.
-* Multiple mandatory tours: ``collapse_mandatory_tours=True`` (CEMDAP) folds the
-  mandatory time of later mandatory tours into the first block and turns their
-  stops into a separate non-mandatory tour; ``False`` (DaySim/ActivitySim) keeps
-  them as tours of their own.
+* Several mandatory episodes in one tour (SR-9), e.g. work → shop → work. No
+  episode is merged; how they are read depends on the source:
+
+  * ``mandatory="stops"`` (DaySim, ActivitySim): the primary activity is the
+    longest episode of the tour's highest-priority mandatory type (work, then
+    education; ties: earliest). Every other episode, mandatory ones included,
+    is a stop before or after it. Both sources have work and school stop
+    purposes.
+  * ``mandatory="work_based"`` (CEMDAP): the primary activity is the
+    work-based period, from the start of the first mandatory episode to the end
+    of the last, typed by the highest-priority mandatory type. The mandatory
+    episodes are its work stays and the activities between them are its
+    work-based tours (``Tour.work_based``), as in CEMDAP's worker pattern.
+* Multiple mandatory tours: ``collapse_mandatory_tours=True`` (CEMDAP, whose
+  worker pattern has one commute each way) folds the mandatory time of later
+  mandatory tours into the last work stay of the first and turns their stops
+  into a separate non-mandatory tour; ``False`` (DaySim/ActivitySim) keeps them
+  as tours of their own.
 """
 
 from dataclasses import dataclass, field
 
-from composhed.data import DISC_ACTS, MANDATORY_ACTS
+from composhed.data import MANDATORY_ACTS
 
 PRIORITY = {"work": 0, "education": 1}
 
@@ -42,6 +50,8 @@ class Tour:
     inbound: list[Stop] = field(default_factory=list)
     start: int = 0
     n_mandatory_episodes: int = 0
+    work_based: list[list[Stop]] = field(default_factory=list)  # CEMDAP work-based tours, in time order
+    work_stays: list[int] = field(default_factory=list)  # CEMDAP: durations of the mandatory episodes
 
     @property
     def mandatory(self) -> bool:
@@ -125,44 +135,64 @@ def _split_tours(activities: list[dict]) -> tuple[list[list[dict]], list[int]]:
     return segments, homes
 
 
-def _make_tour(seg: list[dict], primary_rule: str, counters: ExtractionCounters) -> Tour:
-    mand = [a for a in seg if a["act"] in MANDATORY_ACTS]
+def _stop(a: dict) -> Stop:
+    return Stop(a["act"], int(a["start"]), int(a["duration"]))
+
+
+def _make_tour(seg: list[dict], primary_rule: str, mandatory: str, counters: ExtractionCounters) -> Tour:
+    mand = [i for i, a in enumerate(seg) if a["act"] in MANDATORY_ACTS]
     if mand and primary_rule == "priority":
-        first = mand[0]
         if len(mand) > 1:
             counters.fragmented_tours += 1
-        if len({a["act"] for a in mand}) > 1:
+        if len({seg[i]["act"] for i in mand}) > 1:
             counters.mixed_mandatory_tours += 1
-        m_start = int(first["start"])
-        outbound = [Stop(a["act"], int(a["start"]), int(a["duration"]))
-                    for a in seg if a["act"] in DISC_ACTS and a["start"] < m_start]
-        inbound = [Stop(a["act"], int(a["start"]), int(a["duration"]))
-                   for a in seg if a["act"] in DISC_ACTS and a["start"] >= m_start]
-        return Tour(
-            purpose=first["act"],
-            primary_start=m_start,
-            primary_duration=sum(int(a["duration"]) for a in mand),
-            outbound=outbound,
-            inbound=inbound,
-            start=int(seg[0]["start"]),
-            n_mandatory_episodes=len(mand),
-        )
-    # Longest activity (ties: earliest) is primary; everything else is a stop.
-    best = max(range(len(seg)), key=lambda i: (int(seg[i]["duration"]), -i))
+        purpose = min((seg[i]["act"] for i in mand), key=PRIORITY.get)
+        if mandatory == "work_based":
+            first, last = mand[0], mand[-1]
+            runs, cur = [], []
+            for a in seg[first + 1:last]:
+                if a["act"] in MANDATORY_ACTS:
+                    if cur:
+                        runs.append(cur)
+                    cur = []
+                else:
+                    cur.append(_stop(a))
+            if cur:
+                runs.append(cur)
+            m_start = int(seg[first]["start"])
+            return Tour(
+                purpose=purpose,
+                primary_start=m_start,
+                primary_duration=int(seg[last]["start"]) + int(seg[last]["duration"]) - m_start,
+                outbound=[_stop(a) for a in seg[:first]],
+                inbound=[_stop(a) for a in seg[last + 1:]],
+                start=int(seg[0]["start"]),
+                n_mandatory_episodes=len(mand),
+                work_based=runs,
+                work_stays=[int(seg[i]["duration"]) for i in mand],
+            )
+        best = max((i for i in mand if seg[i]["act"] == purpose), key=lambda i: (int(seg[i]["duration"]), -i))
+    else:
+        # Longest activity (ties: earliest) is primary; everything else is a stop.
+        best = max(range(len(seg)), key=lambda i: (int(seg[i]["duration"]), -i))
     p = seg[best]
     return Tour(
         purpose=p["act"],
         primary_start=int(p["start"]),
         primary_duration=int(p["duration"]),
-        outbound=[Stop(a["act"], int(a["start"]), int(a["duration"])) for a in seg[:best]],
-        inbound=[Stop(a["act"], int(a["start"]), int(a["duration"])) for a in seg[best + 1:]],
+        outbound=[_stop(a) for a in seg[:best]],
+        inbound=[_stop(a) for a in seg[best + 1:]],
         start=int(seg[0]["start"]),
         n_mandatory_episodes=sum(a["act"] in MANDATORY_ACTS for a in seg),
     )
 
 
 def _collapse(tours: list[Tour], homes: list[int], counters: ExtractionCounters) -> tuple[list[Tour], list[int]]:
-    """Fold later mandatory tours into the first mandatory block (CEMDAP mode)."""
+    """Fold later mandatory tours into the first mandatory block (CEMDAP mode).
+
+    A later tour's mandatory time is added to the last work stay of the first
+    block; its stops (work-based ones included) become a non-mandatory tour.
+    """
     first = next(i for i, t in enumerate(tours) if t.mandatory)
     new_tours: list[Tour] = []
     new_homes: list[int] = [homes[0]]
@@ -172,8 +202,11 @@ def _collapse(tours: list[Tour], homes: list[int], counters: ExtractionCounters)
             new_homes.append(homes[i + 1])
             continue
         counters.collapsed_tours += 1
-        tours[first].primary_duration += t.primary_duration
-        stops = t.stops
+        stay = sum(t.work_stays) if t.work_stays else t.primary_duration
+        tours[first].primary_duration += stay
+        if tours[first].work_stays:
+            tours[first].work_stays[-1] += stay
+        stops = t.outbound + [s for run in t.work_based for s in run] + t.inbound
         if stops:
             best = max(range(len(stops)), key=lambda j: (stops[j].duration, -j))
             p = stops[best]
@@ -190,6 +223,7 @@ def extract_day_structure(
     collapse_mandatory_tours: bool = False,
     primary_rule: str = "priority",
     counters: ExtractionCounters | None = None,
+    mandatory: str = "stops",
 ) -> DayStructure:
     """Convert one person's sorted activity rows into a DayStructure.
 
@@ -201,7 +235,7 @@ def extract_day_structure(
     counters.zero_rows_dropped += len(activities) - len(acts)
     segments, homes = _split_tours(acts)
     n_frag_before = counters.fragmented_tours
-    tours = [_make_tour(seg, primary_rule, counters) for seg in segments]
+    tours = [_make_tour(seg, primary_rule, mandatory, counters) for seg in segments]
     if counters.fragmented_tours > n_frag_before:
         counters.persons_fragmented += 1
     n_mand = sum(t.mandatory for t in tours)

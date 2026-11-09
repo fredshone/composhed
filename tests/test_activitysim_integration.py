@@ -18,6 +18,9 @@ def test_train_generate_invariants_and_determinism(tmp_path):
     assert b["spec_version"] and b["feature_names"]
     with pytest.raises(BundleMismatch):
         load_bundle(bundle, "cemdap" if "activitysim" != "cemdap" else "daysim")
+    # ActivitySim's precision: every time is a period point (00:00-05:00 → 02:30, then hh:30), nothing finer.
+    points = {0, 1440} | set(b["models"]["activitysim"].grid.points().tolist())
+    assert set(df["start"].to_list()) <= points and set(df["end"].to_list()) <= points
 
 
 @pytest.mark.parametrize("kwargs", [

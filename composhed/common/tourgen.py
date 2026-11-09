@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from composhed.common.report import GenerationReport
-from composhed.common.schedule import from_episodes
+from composhed.common.schedule import from_tours
 from composhed.common.timewindow import TimeWindow
 from composhed.common.tod import layout_rescale
 
@@ -36,7 +36,8 @@ class PlannedTour:
     end: float | None = None
     outbound: list[tuple[str, float]] = field(default_factory=list)
     inbound: list[tuple[str, float]] = field(default_factory=list)
-    n_remaining: int = 0  # tours still to schedule after this one (ActivitySim look-ahead term)
+    state_kw: dict = field(default_factory=dict)  # context for the timetable terms (``TourTOD.state``)
+    after_previous: bool = False  # must not start before the previous tour of this call ends (ActivitySim)
 
     @property
     def duration(self) -> float:
@@ -63,18 +64,20 @@ def place_tours(
     if constrained:
         for t in prior:
             tw.reserve(int(t.start), int(t.end))
+    prev_end = None
     for t in tours:
         interval = None
+        min_start = prev_end if constrained and t.after_previous else None
         if timing == "independent":
             interval, used = indep[t.group].sample(x_label, tw, rng, buffer, max_resample, use_mask=constrained)
             report.resamples += used if interval is not None else max_resample
         else:
             model = tod[t.group]
-            if constrained and not model.mask(tw).any():
+            if constrained and not model.mask(tw, min_start=min_start).any():
                 interval = None
             else:
                 for attempt in range(max_resample + 1):
-                    interval = model.sample(t.z, tw, rng, use_mask=constrained, n_remaining=t.n_remaining)
+                    interval = model.sample(t.z, tw, rng, use_mask=constrained, min_start=min_start, **t.state_kw)
                     if interval is not None:
                         break
                     report.resamples += 1
@@ -82,6 +85,7 @@ def place_tours(
             report.tours_dropped += 1
             continue
         t.start, t.end = float(interval[0]), float(interval[1])
+        prev_end = t.end
         if constrained:
             tw.reserve(int(t.start), int(t.end))
         placed.append(t)
@@ -108,8 +112,9 @@ def fit_stop_durations(
 
 def tours_to_rows(tours: list[PlannedTour], report: GenerationReport) -> list[dict]:
     """Lay out each tour as outbound stops → primary → inbound stops; gaps are home."""
-    episodes = []
+    out = []
     for t in tours:
+        episodes = []
         cursor = t.start
         for p, d in t.outbound:
             episodes.append((p, cursor, cursor + d))
@@ -120,4 +125,5 @@ def tours_to_rows(tours: list[PlannedTour], report: GenerationReport) -> list[di
         for p, d in t.inbound:
             episodes.append((p, cursor, cursor + d))
             cursor += d
-    return from_episodes(episodes, report)
+        out.append(episodes)
+    return from_tours(out, report)

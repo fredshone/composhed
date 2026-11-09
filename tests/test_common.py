@@ -11,10 +11,10 @@ from composhed.common.schedule import (
     InvalidSchedule,
     check_rows,
     finalise,
-    from_episodes,
+    from_tours,
 )
 from composhed.common.timewindow import TimeWindow
-from composhed.common.tod import TourTOD, layout_rescale, tw_state
+from composhed.common.tod import TourTOD, layout_rescale
 from composhed.common.tours import ExtractionCounters, extract_day_structure
 from composhed.data import extract_tour_memberships
 
@@ -39,9 +39,25 @@ def test_timewindow_reserve_and_queries():
     assert tw.free_windows() == [(0, 480), (1020, 1440)]
     with pytest.raises(ValueError):
         tw.reserve(1000, 1100)
-    # usable windows keep a 10-minute buffer next to tours and 1 minute at day edges
-    assert tw.usable_windows(10) == [(1, 470), (1030, 1439)]
-    assert tw.largest_window(10) == (1, 470)
+    # usable windows keep the buffer next to tours and at the day edges; with none, tours may touch
+    assert tw.usable_windows(10) == [(10, 470), (1030, 1430)]
+    assert tw.largest_window(10) == (10, 470)
+    assert tw.usable_windows(0) == [(0, 480), (1020, 1440)]
+    tw.reserve(1020, 1020)  # a zero-length tour reserves nothing
+    assert tw.remaining() == 1440 - 540
+
+
+def test_point_mask_lets_tours_touch():
+    from composhed.common.tod import point_mask
+
+    tw = TimeWindow()
+    tw.reserve(510, 990)
+    s, e = np.array([450, 990, 510, 750, 990, 450]), np.array([510, 1050, 510, 750, 990, 570])
+    # ends where the tour starts, starts where it ends, zero-length at either edge: available;
+    # zero-length inside it, or overlapping it: not
+    assert point_mask(tw, s, e).tolist() == [True, True, True, False, True, False]
+    tw.reserve(300, 300)  # a zero-length tour: nothing may span it
+    assert point_mask(tw, np.array([240, 300, 240]), np.array([360, 360, 300])).tolist() == [False, True, True]
 
 
 def test_timewindow_masks():
@@ -73,15 +89,19 @@ def test_stops_both_sides_and_parity_with_compositional_labels():
     assert extract_tour_memberships(rows) == ["mandatory_outbound", "mandatory_inbound"]
 
 
-def test_fragmented_work_merged():
-    rows = day(("home", 420), ("work", 240), ("other", 30), ("work", 240), ("home", 510))
+def test_interrupted_work_is_not_merged():
+    rows = day(("home", 420), ("work", 200), ("other", 30), ("work", 280), ("home", 510))
     c = ExtractionCounters()
-    d = extract_day_structure(rows, counters=c)
+    # DaySim / ActivitySim: the longest work episode is primary, the other is a work stop.
+    t = extract_day_structure(rows, counters=c).tours[0]
+    assert t.purpose == "work" and t.primary_start == 650 and t.primary_duration == 280
+    assert [(s.act, s.duration) for s in t.outbound] == [("work", 200), ("other", 30)] and not t.inbound
+    assert c.fragmented_tours == 1
+    # CEMDAP: one work-based period with a work-based tour inside it.
+    d = extract_day_structure(rows, mandatory="work_based")
     t = d.tours[0]
-    assert t.purpose == "work" and t.primary_duration == 480 and t.primary_start == 420
-    assert [s.act for s in t.inbound] == ["other"]  # matches CompoShed mandatory_inbound
-    assert extract_tour_memberships(rows) == ["mandatory_inbound"]
-    assert c.fragmented_tours == 1 and d.total() == 1440
+    assert t.primary_start == 420 and t.primary_duration == 510 and t.work_stays == [200, 280]
+    assert [[s.act for s in run] for run in t.work_based] == [["other"]] and d.total() == 1440
 
 
 def test_two_mandatory_tours_collapse_vs_keep():
@@ -89,9 +109,10 @@ def test_two_mandatory_tours_collapse_vs_keep():
     keep = extract_day_structure(rows)
     assert [t.purpose for t in keep.tours] == ["work", "work"]
     c = ExtractionCounters()
-    col = extract_day_structure(rows, collapse_mandatory_tours=True, counters=c)
+    col = extract_day_structure(rows, collapse_mandatory_tours=True, counters=c, mandatory="work_based")
     assert [t.purpose for t in col.tours] == ["work", "shop"]
-    assert col.tours[0].primary_duration == 440 and col.total() == 1440 and c.collapsed_tours == 1
+    assert col.tours[0].primary_duration == 440 and col.tours[0].work_stays == [440]
+    assert col.total() == 1440 and c.collapsed_tours == 1
     rows2 = day(("home", 420), ("work", 240), ("home", 60), ("work", 200), ("home", 520))
     col2 = extract_day_structure(rows2, collapse_mandatory_tours=True)
     assert len(col2.tours) == 1 and col2.home_stays == [420, 580] and col2.total() == 1440
@@ -200,19 +221,31 @@ def test_alt_attr_mnl_recovers_interaction():
 
 
 def test_tod_timetable_terms():
+    """ActivitySim's timetable rows on prototype_mtc's 19 hourly periods (5-23)."""
     from composhed.activitysim.tod_spec import SPECS
 
-    tod = TourTOD(PeriodGrid.with_early_bin(60), SPECS["nonmandatory"], dynamic="asim")
+    grid = PeriodGrid.with_early_bin(60, early_end=360, early_point=330)
+    assert grid.n == 19 and grid.points()[0] == 330 and grid.points()[1] == 390
+    tod = TourTOD(grid, SPECS["nonmandatory"], dynamic="asim", points=True)
     tw = TimeWindow()
-    tw.reserve(480, 1000)  # 08:00–16:40
-    A = tod.dyn_fn([tw_state(tw, 1)])(0, 1)[0]
-    alt = lambda s, e: tod.alt_index[(int(tod.grid.period_of(s)), int(tod.grid.end_period_of(e)))]
-    j_after, j_later, j_before = alt(1010, 1200), alt(1100, 1200), alt(300, 500)
-    assert A[j_after, 0] == 1 and A[j_after, 1] == 0  # departs in the period the earlier tour ended
-    assert A[j_before, 1] == 1 and A[j_before, 0] == 0  # arrives in the period the later tour starts
-    assert A[j_later, 0] == 0 and A[j_later, 3] > 0 and A[j_later, 4] == 0  # gap to the tour before only
-    assert A[j_after, 2] > 0  # one tour still to schedule
-    assert (tod.dyn_fn([tw_state(TimeWindow(), 0)])(0, 1)[0] == 0).all()
+    tw.reserve(510, 990)  # periods 8 (START) .. 16 (END), 9-15 in the middle
+    w = tod.state(tw)[0]
+    assert w[3] == 2 and (w[4:11] == 7).all() and w[11] == 4
+    A = tod.dyn_fn([tod.state(tw, first=True, numerator=2.0)])(0, 1)[0]
+    alt = lambda a, b: tod.alt_index[(a - 5, b - 5)]  # clock hours -> period indices
+    assert A[alt(16, 18), 0] == 1 and A[alt(17, 18), 0] == 0  # departs in the period the earlier tour ended
+    assert A[alt(5, 8), 1] == 1 and A[alt(5, 7), 1] == 0  # arrives in the period the earlier tour began
+    assert A[alt(18, 20), 2] == 1  # free periods before departure (16 is an END, not middle): a 0/1 flag
+    assert A[alt(17, 18), 2] == 1 and A[alt(16, 18), 2] == 0  # period 15 is in the middle of the tour
+    assert A[alt(5, 8), 3] == 0  # period 9 is in the middle of the tour
+    assert A[alt(18, 20), 4] == 0 and A[alt(18, 20), 5] == 0  # not a later tour
+    assert np.isclose(A[alt(16, 18), 6], 2.0 / (12 - 1))  # 12 free periods, 1 more taken by the tour
+    assert (tod.dyn_fn([tod.state(TimeWindow())])(0, 1)[0] == 0).all()
+    # "Subsequent tour must start after previous tour ends": nothing may start before period 16.
+    m = tod.mask(tw, min_start=990)
+    assert m[alt(16, 18)] and m[alt(22, 23)] and not m[alt(5, 7)] and not m[alt(15, 15)]
+    assert tod.mask(tw)[alt(5, 7)]
+
 
 # ---- duration models ------------------------------------------------------------------------
 @pytest.mark.parametrize("distr", ["loglogistic", "weibull"])
@@ -306,8 +339,9 @@ def test_finalise_keeps_neighbours_and_rounds():
         finalise([("home", 100), ("work", 100)])
     with pytest.raises(InvalidSchedule):
         check_rows([{"act": "work", "start": 0, "end": 1440, "duration": 1440}])
-    rows = from_episodes([("work", 480, 1000), ("shop", 1100, 1130)])
-    assert [r["act"] for r in rows] == ["home", "work", "home", "shop", "home"]
+    rows = from_tours([[("work", 480, 1000)], [("shop", 1000, 1030), ("shop", 1030, 1030)]])
+    assert [(r["act"], r["duration"]) for r in rows] == [("home", 480), ("work", 520), ("home", 0), ("shop", 30),
+                                                         ("shop", 0), ("home", 410)]
 
 
 def test_tod_realise_respects_window_and_rescale_layout():

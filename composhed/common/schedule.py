@@ -16,7 +16,9 @@ def check_rows(rows: list[dict]) -> None:
     """Raise InvalidSchedule unless rows satisfy I1, I2, I4 and I5.
 
     Neighbouring episodes of one type (I3) are allowed: they are generated, as in
-    the observed data, and left for the evaluation to score.
+    the observed data, and left for the evaluation to score. Zero-length episodes
+    are allowed too: a source model can give a stop, an activity or a home stay
+    between tours no time at its own precision.
     """
     if not rows:
         raise InvalidSchedule("empty schedule")
@@ -28,7 +30,7 @@ def check_rows(rows: list[dict]) -> None:
     for i, r in enumerate(rows):
         if not all(isinstance(r[k], int) for k in ("start", "end", "duration")):
             raise InvalidSchedule("I4: non-integer times")
-        if r["start"] != cursor or r["end"] - r["start"] != r["duration"] or r["duration"] <= 0:
+        if r["start"] != cursor or r["end"] - r["start"] != r["duration"] or r["duration"] < 0:
             raise InvalidSchedule("I4: non-contiguous times")
         if r["act"] not in ACTIVITY_TYPES:
             raise InvalidSchedule(f"I5: unknown activity {r['act']!r}")
@@ -41,9 +43,9 @@ def finalise(seq: list[tuple[str, float]], report: GenerationReport | None = Non
     """Convert an (act, duration) sequence summing to 1440 into checked integer rows.
 
     Durations may be fractional: cumulative boundaries are rounded, so the total is
-    preserved exactly. Episodes that round to zero minutes are dropped. Neighbouring
-    episodes of one type are kept as they are. A sequence whose total is not 1440
-    is an error, not something to repair here.
+    preserved exactly. Every episode is kept, including those of zero minutes and
+    neighbouring episodes of one type. A sequence whose total is not 1440 is an
+    error, not something to repair here.
     """
     total = float(sum(d for _, d in seq))
     if abs(total - DAY) > 1e-6:
@@ -51,27 +53,30 @@ def finalise(seq: list[tuple[str, float]], report: GenerationReport | None = Non
     bounds = np.rint(np.cumsum([0.0] + [float(d) for _, d in seq])).astype(int)
     bounds[-1] = DAY
     episodes = [(a, int(bounds[i]), int(bounds[i + 1])) for i, (a, _) in enumerate(seq)]
-    rows = [{"act": a, "start": s, "end": e, "duration": e - s} for a, s, e in episodes if e > s]
+    rows = [{"act": a, "start": s, "end": e, "duration": e - s} for a, s, e in episodes]
     check_rows(rows)
     return rows
 
 
-def from_episodes(
-    episodes: list[tuple[str, float, float]], report: GenerationReport | None = None
+def from_tours(
+    tours: list[list[tuple[str, float, float]]], report: GenerationReport | None = None
 ) -> list[dict]:
-    """Build a day from non-overlapping (act, start, end) out-of-home episodes; gaps are home."""
+    """Build a day from non-overlapping tours, each a list of (act, start, end) episodes.
+
+    Home fills the time before, between and after the tours; a home stay is
+    written between every two tours, even when it lasts zero minutes.
+    """
     seq: list[tuple[str, float]] = []
     cursor = 0.0
-    for act, s, e in sorted(episodes, key=lambda x: x[1]):
-        if s < cursor - 1e-6:
-            raise InvalidSchedule("overlapping episodes")
-        if s > cursor:
-            seq.append(("home", s - cursor))
-        seq.append((act, e - s))
-        cursor = e
+    for episodes in sorted(tours, key=lambda t: (t[0][1], t[-1][2])):
+        s0 = episodes[0][1]
+        if s0 < cursor - 1e-6:
+            raise InvalidSchedule("overlapping tours")
+        seq.append(("home", max(s0 - cursor, 0.0)))
+        for act, s, e in episodes:
+            seq.append((act, e - s))
+        cursor = episodes[-1][2]
     seq.append(("home", DAY - cursor))
-    if seq[0][0] != "home":
-        seq.insert(0, ("home", 0.0))
     return finalise(seq, report)
 
 

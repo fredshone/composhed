@@ -26,8 +26,10 @@ The chain runs in DaySim's order (`ChoiceModelRunner`):
 
 Any time not spent on a tour is home. Exact minutes are drawn uniformly from
 the free minutes of each chosen half-hour, as DaySim's
-`TimeWindow.GetAvailableMinute` does. As in DaySim, a person-day in which a
-tour or stop cannot be placed is simulated again.
+`TimeWindow.GetAvailableMinute` does, so DaySim's own precision is kept:
+half-hour choices, then minutes. A tour may start in the minute the previous
+one ends (a zero-length home stay). As in DaySim, a person-day in which a tour
+or stop cannot be placed is simulated again.
 
 ## Running it
 
@@ -79,12 +81,12 @@ are available, as in DaySim.
 
 | DaySim model | What it decides | Model here | Code | Fidelity | Differences |
 |---|---|---|---|---|---|
-| `IndividualPersonDayPatternModel` | Whether the day has a tour of each of the 7 purposes and a stop of each of the 5 stop purposes | Logit over all 1,324 feasible patterns (≤ 3 tour purposes, ≤ 4 stop purposes, ≤ 5 in all, stops only with a tour, as DaySim), with DaySim's terms: tour and stop constants; tour–stop (every tour purpose with every stop purpose but social / recreation), tour–tour, stop–stop and tour-count × stop-count constants; the person terms on each purpose's presence; one person vector × log(tour purposes) when 2+ and one × log(stop purposes) when 2+; the non-mandatory-tour and stop components (cars, density, density × child 5–15, logsum); logsum on each tour and stop. Saturday and Sunday on each purpose's presence. 258 coefficients. DaySim's availability: work tours only for workers, school tours only for students. | `models.DaysimModels.pattern` | simplified | DaySim has 2,080 alternatives: work and school stops do not exist here (work inside a tour is merged into the work block, [tour_rules.md](tour_rules.md)). 1,245 NTS days are outside DaySim's choice set (1,198 break the worker / student rule, 47 its limits) and are left out of this model's estimation; their tours are used by the later models. |
+| `IndividualPersonDayPatternModel` | Whether the day has a tour of each of the 7 purposes and a stop of each of the same 7 purposes | Logit over all 2,080 feasible patterns, as DaySim (≤ 3 tour purposes, ≤ 4 stop purposes, ≤ 5 in all, stops only with a tour, work or school stops only with a work or school tour and at most one of them), with DaySim's terms: tour and stop constants; tour–stop (every tour purpose with every stop purpose but social / recreation; work and school stops only with work and school tours), tour–tour, stop–stop and tour-count × stop-count constants; the person terms on each purpose's presence; one person vector × log(tour purposes) when 2+ and one × log(stop purposes) when 2+; the non-mandatory-tour and non-mandatory-stop components (cars, density, density × child 5–15, logsum); logsum on each tour and stop. Saturday and Sunday on each purpose's presence. DaySim's availability: work tours and stops only for workers, school tours and stops only for students. | `models.DaysimModels.pattern` | simplified | NTS days outside DaySim's choice set (the worker / student rule or its limits) are left out of this model's estimation and counted in `validation.json`; their tours are used by the later models. |
 | `PersonExactNumberOfToursModel` | 1, 2 or 3+ tours of each purpose in the pattern | Logit per purpose with DaySim's terms: the person terms and the day's tours and stops on 2 and 3+ (one coefficient for both), a constant and a logsum term for each; Saturday and Sunday added | `.exact` | full | Tours beyond 3 of one purpose are dropped from the training data (counted). |
 | Tour priority | Order in which tours are scheduled | Fixed: work → education → escort → other (personal business) → shop → visit → leisure (social / recreation; DaySim's meal purpose has no NTS equivalent) | `data.priority_order` | full | |
 | `WorkTourTimeModel`, `SchoolTourTimeModel`, `OtherHomeBasedTourTimeModel` | Arrival and departure period at the primary destination (1,176 pairs at 30 minutes) | Conditional logit with DaySim's grouped arrival, departure and duration constants; arrival and duration shift terms by person type, tour purpose, income, the four priority flags, stop purposes in the pattern and escort stops; time-band interactions; and the time-window terms (log free minutes in the arrival and departure periods, adjacent free time for later tours, stops and tours still to place per free hour). Separate models for work, education and other tours. | `common.tod.TourTOD` with `daysim.tod_spec` | simplified | No mode impedances, transit or subtour terms. Saturday and Sunday shift terms added (DaySim models a weekday). |
-| Time windows | Which pairs and periods are still possible | Time taken by earlier tours, plus 1 minute at home, is removed from the choice set | `common.timewindow.TimeWindow` | full | |
-| `IntermediateStopGenerationModel` | The next stop's purpose, or no more stops | Logit over none + escort, other (personal business), shop, visit (DaySim's meal slot), leisure (social / recreation); a purpose is available only if the pattern has it. DaySim's terms, each on the alternatives it has there: trip number × half-tour, tours in the day, tours already simulated, before a mandatory destination and school tour on "none"; per stop purpose its tour-purpose flags, half-tour, stops of that purpose so far, tours remaining, free hours and time-of-day bands; one-trip, adult-male and person-type terms where DaySim has them. Saturday and Sunday per purpose added. 84 coefficients (source: 106). | `.stopgen` | simplified | No tour-mode, household-children, one-person-household or parcel terms. At most 4 stops per half-tour. |
+| Time windows | Which pairs and periods are still possible | Time taken by earlier tours is removed from the choice set; a tour may start in the minute another ends | `common.timewindow.TimeWindow` | full | |
+| `IntermediateStopGenerationModel` | The next stop's purpose, or no more stops | Logit over none + work, education (school), escort, other (personal business), shop, visit (DaySim's meal slot), leisure (social / recreation). As DaySim, a purpose is available only if the pattern has it and the tour allows it: work and school stops only on work and school tours, escort stops only on work, school and escort tours. Observed stops the source would not allow are left out of estimation (counted). DaySim's terms, each on the alternatives it has there: trip number × half-tour, tours in the day, tours already simulated, before a mandatory destination and school tour on "none"; per stop purpose its tour-purpose flags, half-tour, stops of that purpose so far, tours remaining, free hours and time-of-day bands; one-trip, adult-male and person-type terms where DaySim has them. Saturday and Sunday per purpose added. | `.stopgen` | simplified | No tour-mode, household-children, one-person-household or parcel terms. At most 4 stops per half-tour. |
 | `TripTimeModel` | The half-hour of each stop's outer boundary | Conditional logit over the free periods between the anchor and the window edge: direction-specific period constants, a period shift and duration-from-anchor constants and shifts by person type, direction × work tour and stop purpose, the log free share of the period, and the trip-remaining and tours-remaining window terms | `models.TripTimeModel` | simplified | Zero travel time, so a stop lasts from its own boundary to the next one. No mode or impedance terms. |
 | Home | Time between tours | Gaps are home | `common.schedule.from_episodes` | full | |
 | Infeasible tours and stops | | As DaySim, the person-day is simulated again (up to `--max-resample` times, counted as `person_day_resimulated`); after that the tour or stop is dropped (counted). | `daysim.chain` | full | |
@@ -96,21 +98,21 @@ them, and neither does this variant. They are written as separate episodes
 pairs. Nothing is merged.
 
 **Estimation:** each observed tour is estimated against the time its day's
-higher-priority tours left free, buffer included. An observed choice that lands
-inside a buffer is kept available and counted (`forced_available` in
-`validation.json`).
+higher-priority tours left free. An observed choice that is not available is
+kept available and counted (`forced_available` in `validation.json`).
 
 ## Deviations from DaySim
 
-* **No locations, modes or travel times.** At least 1 minute at home between
+* **No locations, modes or travel times.** No minimum home stay between
   tours.
 * **Coefficients are re-estimated on NTS**, with DaySim's terms that have an
   NTS counterpart (approximated where NTS is coarser), plus Saturday and
   Sunday. No calibration. See [how the variants differ from the
   sources](source_differences.md).
 * **One person-day**: no household or joint tours.
-* **No work or school stops, no tours from work.** Work interrupted by other
-  activities is merged into one block ([tour_rules.md](tour_rules.md)).
+* **No tours from work.** Work interrupted by other activities is a work tour
+  with work stops; DaySim would read most of these as work-based subtours
+  ([tour_rules.md](tour_rules.md)).
 * **Day starts at midnight**, not 03:00.
 
 ## Ablations

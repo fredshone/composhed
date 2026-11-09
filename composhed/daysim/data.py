@@ -1,21 +1,21 @@
 """DaySim training records.
 
 Days are extracted with ``extract_day_structure(collapse_mandatory_tours=False)``:
-second work / education tours are kept. Tours are ordered by the fixed DaySim
+second work / education tours are kept, and a work or education episode that is
+not a tour's primary activity is a work or school stop, as DaySim has them. Tours are ordered by the fixed DaySim
 priority (DAY-3): work → school → escort → personal business → shop → meal →
 social/recreation, mapped to NTS as work → education → escort → other → shop →
 visit → leisure (no meal purpose; visit and leisure both fall under DaySim's
 social/recreation and are kept apart); ties keep time order.
 
 Day pattern (DAY-1, ``IndividualPersonDayPatternModel``): for each of the 7 tour
-purposes whether the day has a tour of it, and for each of the 5 stop purposes
-(escort, other, shop, visit, leisure) whether the day has a stop of it. Work and
-education stops do not exist here: work or education inside a tour is merged
-into the work block (docs/tour_rules.md). As DaySim, patterns have at most 3
-tour purposes, at most 4 stop purposes, at most 5 of both together, and stops
-only with a tour. As DaySim, work tours are available only to workers
-(``employment = employed``) and education tours only to students (``employment =
-student`` or a school-age child, SCHOOL / DRIVING). Observed days outside these
+purposes whether the day has a tour of it, and for each of the same 7 stop
+purposes whether the day has a stop of it. As DaySim, patterns have at most 3
+tour purposes, at most 4 stop purposes, at most 5 of both together, stops only
+with a tour, work or school stops only with a work or school tour, and at most
+one of work and school stops. As DaySim, work tours and stops are available
+only to workers (``employment = employed``) and education tours and stops only
+to students (``employment = student`` or a school-age child, SCHOOL / DRIVING). Observed days outside these
 rules are left out of the day-pattern estimation (counted); their tours are
 still used by the later models.
 
@@ -34,7 +34,7 @@ from composhed.data import LABEL_COLS
 PRIORITY = ["work", "education", "escort", "other", "shop", "visit", "leisure"]
 TOUR_PURPOSES = PRIORITY
 NM_PURPOSES = PRIORITY[2:]
-STOP_PURPOSES = ["escort", "other", "shop", "visit", "leisure"]
+STOP_PURPOSES = PRIORITY
 MAX_TOUR_PURPOSES = 3
 MAX_STOP_PURPOSES = 4
 MAX_TOUR_AND_STOP_PURPOSES = 5
@@ -46,9 +46,11 @@ def tod_group(purpose: str) -> str:
 
 
 def feasible(tours: tuple, stops: tuple) -> bool:
+    """DaySim's ``InitializeDayPatterns`` limits (work and school are the first two purposes)."""
     nt, ns = sum(tours), sum(stops)
+    mand_stops = stops[0] + stops[1]
     return (nt <= MAX_TOUR_PURPOSES and ns <= MAX_STOP_PURPOSES and nt + ns <= MAX_TOUR_AND_STOP_PURPOSES
-            and (ns == 0 or nt > 0))
+            and (ns == 0 or nt > 0) and (mand_stops == 0 or tours[0] + tours[1] > 0) and mand_stops <= 1)
 
 
 def enumerate_patterns() -> list[tuple]:
@@ -86,8 +88,19 @@ def is_student(labels: dict, ptype: str) -> bool:
 
 
 def available(vec: tuple, worker: bool, student: bool) -> bool:
-    """DaySim's availability: work tours only for workers, school tours only for students."""
-    return (worker or not vec[0]) and (student or not vec[1])
+    """DaySim's availability: work tours and stops only for workers, school tours and stops only for students."""
+    nt = len(TOUR_PURPOSES)
+    return (worker or not (vec[0] or vec[nt])) and (student or not (vec[1] or vec[nt + 1]))
+
+
+def stop_allowed(tour_purpose: str, stop_purpose: str) -> bool:
+    """``IntermediateStopGenerationModel``: work and school stops only on work and school tours, escort stops only on
+    work, school and escort tours."""
+    if stop_purpose in ("work", "education"):
+        return tour_purpose in ("work", "education")
+    if stop_purpose == "escort":
+        return tour_purpose in ("work", "education", "escort")
+    return True
 
 
 def pattern_tours(vec: tuple, counts: dict) -> list[str]:

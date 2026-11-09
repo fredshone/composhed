@@ -8,18 +8,23 @@ DAY = 1440
 class TimeWindow:
     """Tracks reserved minutes of a day.
 
-    Out-of-home tours are reserved as half-open minute intervals. Availability
-    queries reserve a ``buffer`` of home time (HOME_INTER) next to existing tours
-    and at least one minute of home at the start and end of the day (I2).
+    Out-of-home tours are reserved as half-open minute intervals, so a tour may
+    start in the minute another ends. Availability queries can keep a ``buffer``
+    of home time next to existing tours and at the start and end of the day; the
+    DaySim and ActivitySim variants use none.
     """
 
     def __init__(self, day: int = DAY) -> None:
         self.day = day
         self.busy = np.zeros(day, dtype=bool)
+        self.points: list[int] = []  # zero-length tours: no later tour may span them
+        self.tours: list[tuple[int, int]] = []  # every reserved [start, end), in reservation order
 
     def copy(self) -> "TimeWindow":
         tw = TimeWindow(self.day)
         tw.busy = self.busy.copy()
+        tw.points = list(self.points)
+        tw.tours = list(self.tours)
         return tw
 
     def is_free(self, start: int, end: int) -> bool:
@@ -27,10 +32,16 @@ class TimeWindow:
         return end > start and not self.busy[start:end].any()
 
     def reserve(self, start: int, end: int) -> None:
+        """Reserve [start, end); a zero-length tour reserves no minutes but is remembered as a point."""
         start, end = int(start), int(end)
+        if end == start:
+            self.points.append(start)
+            self.tours.append((start, end))
+            return
         if not self.is_free(start, end):
             raise ValueError(f"interval [{start}, {end}) is not free")
         self.busy[start:end] = True
+        self.tours.append((start, end))
 
     def remaining(self) -> int:
         return int((~self.busy).sum())
@@ -50,15 +61,14 @@ class TimeWindow:
         return list(zip(np.flatnonzero(d == 1).tolist(), np.flatnonzero(d == -1).tolist()))
 
     def usable_windows(self, buffer: int = 0) -> list[tuple[int, int]]:
-        """Free windows shrunk by ``buffer`` next to reserved tours and by 1 at the day edges.
+        """Free windows shrunk by ``buffer`` next to reserved tours and at the day edges.
 
-        A tour placed inside a usable window always leaves >= buffer minutes of home
-        between it and any other tour, and starts/ends the day at home.
+        A tour placed inside a usable window leaves >= buffer minutes of home
+        between it and any other tour and at either end of the day.
         """
         out = []
         for a, b in self.free_windows():
-            a2 = a + (buffer if a > 0 else 1)
-            b2 = b - (buffer if b < self.day else 1)
+            a2, b2 = a + buffer, b - buffer
             if b2 > a2:
                 out.append((a2, b2))
         return out

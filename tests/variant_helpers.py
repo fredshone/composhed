@@ -28,14 +28,13 @@ def assert_invariants(sched_path: str, n_persons: int) -> pl.DataFrame:
     df = pl.read_csv(sched_path)
     assert df["pid"].n_unique() == n_persons
     for pid, rows in df.group_by("pid", maintain_order=True):
-        rows = rows.sort("start")
         acts = rows["act"].to_list()
         starts, ends, durs = rows["start"].to_list(), rows["end"].to_list(), rows["duration"].to_list()
         assert sum(durs) == 1440, f"pid={pid}: I1"
         assert acts[0] == "home" and acts[-1] == "home", f"pid={pid}: I2"
         assert starts[0] == 0 and ends[-1] == 1440, f"pid={pid}: I4"
         assert all(e == s for e, s in zip(ends, starts[1:])), f"pid={pid}: I4 contiguity"
-        assert all(e - s == d > 0 for s, e, d in zip(starts, ends, durs)), f"pid={pid}: I4 durations"
+        assert all(e - s == d >= 0 for s, e, d in zip(starts, ends, durs)), f"pid={pid}: I4 durations"
         assert set(acts) <= set(ACTIVITY_TYPES), f"pid={pid}: I5"
     return df
 

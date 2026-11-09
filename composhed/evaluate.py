@@ -22,7 +22,12 @@ def _load_schedules(path: str) -> pd.DataFrame:
         df = df.drop(columns=["hid"])
     if "duration" not in df.columns:
         df["duration"] = df["end"] - df["start"]
-    return df[["pid", "act", "start", "end", "duration"]].sort_values(["pid", "start"]).reset_index(drop=True)
+    # Keep each day's written order: zero-length episodes share a start minute with their neighbours.
+    if "seq" in df.columns:
+        df = df.sort_values(["pid", "seq"], kind="stable")
+    else:
+        df = df.sort_values("pid", kind="stable")
+    return df[["pid", "act", "start", "end", "duration"]].reset_index(drop=True)
 
 
 def _load_attributes(path: str) -> pd.DataFrame:

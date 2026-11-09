@@ -3,9 +3,7 @@
 import time
 
 import click
-import numpy as np
 
-from composhed.cemdap.chain import HOME_INTER
 from composhed.cemdap.data import build_records
 from composhed.cemdap.models import CemdapModels
 from composhed.common.bundle import save_bundle
@@ -50,11 +48,8 @@ def train(
     hold_metrics = models.validate(hold_records, X_hold) if hold_records else {}
     for name, metrics in train_metrics.items():
         report.add(name, metrics, hold_metrics.get(name))
-    gaps = [h["duration"] for r in records for h in r.home_stays]
     report.info = {
         "extraction": counters.as_dict(),
-        "home_inter": HOME_INTER,
-        "between_tour_home_p05": float(np.percentile(gaps, 5)) if gaps else None,
         "n_train": len(records),
         "n_holdout": len(hold_records),
         "aic": {k: getattr(v, "aic_all_", None) for k, v in
@@ -65,7 +60,6 @@ def train(
         "independent_timing": independent_timing,
         "consistency": consistency,
         "max_resample": max_resample,
-        "home_inter": HOME_INTER,
         "holdout_fraction": holdout_fraction,
         "split_seed": split_seed,
         "seed": seed,

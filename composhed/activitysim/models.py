@@ -9,7 +9,7 @@
 | non-mandatory tour frequency | ``SpecLogit`` on ``non_mandatory_tour_frequency.csv`` with one coefficient file per person type (``interaction_simulate`` over the 48 alternatives without eat-out), after mandatory scheduling; then the extension lookup |
 | non-mandatory tour scheduling | ``TourTOD`` with the MTC non-mandatory spec |
 | stop frequency | ``SpecLogit`` on ``stop_frequency_<purpose>.csv`` per tour purpose (school tours of university students use ``univ``) |
-| trip purpose / trip scheduling | probability lookups estimated on NTS |
+| trip purpose / trip scheduling | probability tables with ``trip_purpose_probs.csv`` / ``trip_scheduling_probs.csv``'s keys, tabulated on NTS |
 
 The spec files are vendored in ``specs/``. Rows whose variables NTS lacks are
 dropped (``sourcevars``); every remaining coefficient is re-estimated, except
@@ -25,6 +25,7 @@ import numpy as np
 from composhed.activitysim.data import (
     MAX_EXTRA,
     MAX_STOPS,
+    NM_CAPS,
     NM_ORDER,
     AsimRecord,
     AsimTour,
@@ -38,16 +39,16 @@ from composhed.activitysim.sourcevars import (
     PersonVars,
     subset,
 )
-from composhed.activitysim.tod_spec import SPECS
+from composhed.activitysim.tod_spec import SPECS, clock_hours
 from composhed.common.periods import PeriodGrid
 from composhed.common.spec import SpecLogit, read_spec
 from composhed.common.timewindow import TimeWindow
-from composhed.common.tod import IndependentTiming, TourTOD, tw_state
-from composhed.data import DISC_ACTS
+from composhed.common.tod import I_MIDDLE, IndependentTiming, TourTOD, asim_state
+from composhed.data import ACTIVITY_TYPES
 
 SPEC_DIR = Path(__file__).parent / "specs"
 GROUPS = ["work", "school", "nonmandatory"]
-STOP_ACTS = sorted(DISC_ACTS)
+STOP_ACTS = sorted(a for a in ACTIVITY_TYPES if a != "home")  # ActivitySim's trip purposes include work and school
 DAY = 1440
 STOP_ALTS = [f"{o}out_{i}in" for o in range(MAX_STOPS + 1) for i in range(MAX_STOPS + 1)]
 NM_VARS = {"num_mand", "log_max_window", "escort", "shopping", "othmaint", "othdiscr", "eatout", "social", "tot_tours"}
@@ -176,49 +177,82 @@ def tour_contexts(purposes: list[str], mtf: str | None, n_mand: int, nm_purposes
     return out
 
 
-def residual_window(intervals, buffer: int) -> float:
-    """log(1 + hours) of the largest window left free by ``intervals`` (ActivitySim "Logged Maximum Residual Window")."""
+def timetable_kw(ctx: dict, mandatory: bool) -> dict:
+    """Context of the timetable rows (``asim_state``), as the scheduling specs define them.
+
+    Mandatory tours (``tour_num`` / ``tour_count`` among the mandatory tours): adjacent-window terms for the first
+    of 2+ and later tours; tours still to schedule per free period only for the first of 2+ (numerator 1).
+    Non-mandatory tours: adjacent-window terms by ``tour_type_num`` / ``tour_type_count`` (tours of the same
+    purpose); numerator ``1 + tour_count - tour_num`` over all the person's non-mandatory tours.
+    """
+    if mandatory:
+        first = ctx["n_in_phase"] > 1 and ctx["idx"] == 0
+        return {"first": first, "second": ctx["idx"] > 0, "numerator": float(first)}
+    return {"first": ctx["same_count"] > 1 and ctx["same_idx"] == 0, "second": ctx["same_idx"] > 0,
+            "numerator": float(ctx["n_in_phase"] - ctx["idx"])}
+
+
+def after_previous(ctx: dict, mandatory: bool) -> bool:
+    """The specs' "subsequent tour must start after previous tour ends" rows: mandatory ``tour_num > 1``
+    (coefficient -100), non-mandatory ``tour_type_num > 1`` (-999), against the person's previous tour of the
+    same scheduling call."""
+    return ctx["idx"] > 0 if mandatory else ctx["same_idx"] > 0
+
+
+def log_max_window(intervals, grid: PeriodGrid) -> float:
+    """``log1p(max_window)``: the longest run of periods not in the middle of a tour (ActivitySim
+    ``max_time_block_available``, "Logged Maximum Residual Window")."""
     tw = TimeWindow()
-    for s, e in intervals:
-        if tw.is_free(s, e):
-            tw.reserve(s, e)
-    w = tw.largest_window(buffer)
-    return float(np.log1p((w[1] - w[0]) / 60.0)) if w else 0.0
+    tw.tours = [(int(s), int(e)) for s, e in intervals]
+    w = asim_state(tw, grid)[0]
+    best = run = 0
+    for v in w:
+        run = run + 1 if v != I_MIDDLE else 0
+        best = max(best, run)
+    return float(np.log1p(best))
 
 
-def hour_band(minute: float) -> str:
-    """Tour-hour range for the trip purpose lookup (ActivitySim ``depart_range_start/end``)."""
-    h = minute / 60.0
-    return "early" if h < 9 else ("midday" if h < 16 else "late")
+def purpose_range(segment: str, outbound: bool, start_hour: float) -> str:
+    """``trip_purpose_probs.csv``'s ``depart_range_start/end`` on the tour start hour: split for work tours only
+    (outbound 5–8 / 9–23, inbound 5–14 / 15–23), 5–23 for every other purpose."""
+    if segment != "work":
+        return "5-23"
+    if outbound:
+        return "5-8" if start_hour <= 8 else "9-23"
+    return "5-14" if start_hour <= 14 else "15-23"
 
 
-def departure_keys(t: AsimTour, grid: PeriodGrid) -> list[tuple[tuple, float, float]]:
-    """Observed trip departures of a tour: (lookup key, departure, neighbouring event) (ASIM-9).
+def tour_start_hour(grid: PeriodGrid, minute: float) -> float:
+    """Clock hour of the tour's start period (ActivitySim ``tours.start``)."""
+    return float(np.floor(clock_hours(grid, np.array([grid.period_of(min(minute, DAY - 1))]))[0]))
 
-    Outbound: departures from each stop, indexed forwards from the tour start.
-    Inbound: departures from the primary activity and each stop but the last,
-    indexed backwards from the tour end (ActivitySim schedules inbound trips in
-    reverse). The anchor ("tour hour") is the start period outbound and the end
-    period inbound. The neighbouring event is the previous departure (or tour
-    start) outbound and the next departure (or tour end) inbound. Tours whose departures are not increasing (stops inside a
-    fragmented work block, docs/tour_rules.md) give no records.
+
+def departure_keys(t: AsimTour, grid: PeriodGrid, segment: str) -> list[tuple[tuple, float]]:
+    """Observed trip departures of a tour: ((purpose, outbound, tour_hour, trip_num), departure) (ASIM-9).
+
+    As ``trip_scheduling_probs.csv``: ``tour_hour`` is the start period outbound and the
+    end period inbound; ``trip_num`` numbers the trips of each leg from 1. Outbound trip 1
+    leaves at the tour start and inbound trip ``n + 1`` at the tour end, so they are not
+    scheduled: the records are outbound trips 2.. (from each stop) and inbound trips
+    1..n (from the primary activity and each stop but the last). Tours whose
+    departures decrease give no records.
     """
     out_deps = [s + d for _, s, d in t.outbound]
     in_deps = ([t.primary_end] + [s + d for _, s, d in t.inbound[:-1]]) if t.inbound else []
     seq = [t.start] + out_deps + in_deps + [t.end]
-    if any(b <= a for a, b in zip(seq, seq[1:])) and (out_deps or in_deps):
+    if any(b < a for a, b in zip(seq, seq[1:])) and (out_deps or in_deps):
         return []
-    cls = tour_class(t.purpose)
-    out = []
     a_out, a_in = int(grid.period_of(t.start)), int(grid.end_period_of(t.end))
-    for k, dep in enumerate(out_deps):
-        prev = out_deps[k - 1] if k else t.start
-        out.append((("outbound", cls, a_out, t.purpose, min(k, 2)), dep, prev))
-    n = len(in_deps)
-    for k, dep in enumerate(in_deps):
-        nxt = in_deps[k + 1] if k + 1 < n else t.end
-        out.append((("inbound", cls, a_in, t.purpose, min(n - 1 - k, 2)), dep, nxt))
+    out = [((segment, True, a_out, k + 2), dep) for k, dep in enumerate(out_deps)]
+    out += [((segment, False, a_in, k + 1), dep) for k, dep in enumerate(in_deps)]
     return out
+
+
+def extension_eligible(vec: tuple) -> list[bool]:
+    """Purposes whose count may be extended (``extend_tour_counts``): the person chose 1–4 tours in all and the
+    purpose is at its maximum (escort 2, others 1)."""
+    ok = 1 <= sum(vec) <= 4
+    return [ok and k == NM_CAPS[p] for p, k in zip(NM_ORDER, vec)]
 
 
 
@@ -262,7 +296,7 @@ class Lookup:
 
 
 class AsimModels:
-    def __init__(self, time_resolution: int = 60, segmented: bool = True, home_inter: int = 1,
+    def __init__(self, time_resolution: int = 60, segmented: bool = True, home_inter: int = 0,
                  tod_maxiter: int = 200) -> None:
         self.time_resolution = time_resolution
         self.segmented = segmented
@@ -289,27 +323,41 @@ class AsimModels:
 
     # ---- designs ------------------------------------------------------------------------------------
     def tod_design(self, records: list[AsimRecord], X: np.ndarray) -> dict:
-        """Scheduling observations in chain order; masks and timetable terms from the earlier observed tours."""
+        """Scheduling observations in chain order; masks and timetable terms from the earlier observed tours, each
+        reserved at its start and end periods' points, as generated tours are. A chosen pair the masks rule out (an
+        overlap, or a later tour starting before the previous one ends) is made available and counted
+        (``forced_available_``)."""
         out = {g: {"Z": [], "X": [], "starts": [], "ends": [], "masks": [], "states": []} for g in GROUPS}
         for r, xl in zip(records, X):
             tw = TimeWindow()
             mand = [t.purpose for t in r.tours if phase(t.purpose) == "mandatory"]
             nm = [t.purpose for t in r.tours if phase(t.purpose) != "mandatory"]
             ctxs = (tour_contexts(mand, r.mtf, len(mand), nm) + tour_contexts(nm, r.mtf, len(mand), nm))
+            prev_end, prev_phase = None, None
             for t, ctx in zip(r.tours, ctxs):
                 g = tod_group(t.purpose)
                 d = out[g]
+                if phase(t.purpose) != prev_phase:
+                    prev_end, prev_phase = None, phase(t.purpose)
                 if self.tod.get(g) is None:
                     continue
+                mandatory = g != "nonmandatory"
                 d["Z"].append(self.z(g, r.labels, r.ptype, t.purpose, ctx))
                 d["X"].append(xl)
                 d["starts"].append(t.start)
                 d["ends"].append(t.end)
-                d["masks"].append(self.tod[g].mask(tw))
-                d["states"].append(tw_state(tw, ctx["n_in_phase"] - ctx["idx"] - 1))
-                if tw.is_free(t.start, t.end):
-                    tw.reserve(t.start, t.end)
+                d["masks"].append(self.tod[g].mask(tw, min_start=prev_end if after_previous(ctx, mandatory) else None))
+                d["states"].append(self.tod[g].state(tw, **timetable_kw(ctx, mandatory)))
+                s, e = self.snap(t.start, t.end)
+                prev_end = e
+                if tw.is_free(s, e) or s == e:
+                    tw.reserve(s, e)
         return out
+
+    def snap(self, start: float, end: float) -> tuple[int, int]:
+        """Minutes [start, end) at period precision: the points of the start and end periods."""
+        pts = self.grid.points()
+        return int(pts[self.grid.period_of(start)]), int(pts[self.grid.end_period_of(end)])
 
     def _nmtf_data(self, records: list[AsimRecord], env: dict) -> dict:
         """Per segment: (env, n, chosen labels) for the M and N days."""
@@ -318,8 +366,8 @@ class AsimModels:
         for seg in sorted({self.nm_segment(records[i].ptype) for i in idx}):
             sel = [i for i in idx if self.nm_segment(records[i].ptype) == seg]
             n_mand = [len(mtf_tours(records[i].mtf)) if records[i].mtf else 0 for i in sel]
-            win = [residual_window([(t.start, t.end) for t in records[i].tours if phase(t.purpose) == "mandatory"],
-                                   self.home_inter) for i in sel]
+            win = [log_max_window([self.snap(t.start, t.end) for t in records[i].tours
+                                   if phase(t.purpose) == "mandatory"], self.grid) for i in sel]
             out[seg] = (self.nm_env(subset(env, sel), n_mand, win), len(sel), [nm_label(records[i].nm) for i in sel])
         return out
 
@@ -349,6 +397,14 @@ class AsimModels:
               f"unavailable choice left out; ASIM-3 MTF: {self.mtf.n_params} parameters, "
               f"{self.mtf.n_unavailable_chosen_} left out", flush=True)
 
+        # prototype_mtc: 19 hourly periods 5–23, the first holding every earlier time (written at 05:30). The
+        # sub-hourly ablations start at 03:00, as ActivitySim's half-hourly examples (SEMCOG, ARC, MWCOG).
+        if self.time_resolution == 60:
+            self.grid = PeriodGrid.with_early_bin(60, early_end=360, early_point=330)
+        else:
+            self.grid = PeriodGrid.with_early_bin(self.time_resolution, early_end=180)
+        grid = self.grid
+
         # Non-mandatory frequency over the 48 alternatives (one spec, one coefficient file per person type),
         # then the extension lookup.
         vectors = nm_alternatives()
@@ -357,8 +413,8 @@ class AsimModels:
         ext_keys, ext_vals = [], []
         for r in records:
             if r.cdap in ("M", "N"):
-                for p, k, extra in zip(NM_ORDER, r.nm, r.nm_extra):
-                    if k > 0:
+                for p, ok, extra in zip(NM_ORDER, extension_eligible(r.nm), r.nm_extra):
+                    if ok:
                         ext_keys.append((p, r.cdap == "M", r.ptype))
                         ext_vals.append(extra)
         self.nm_extension = Lookup(list(range(MAX_EXTRA + 1))).fit(ext_keys, ext_vals)
@@ -369,9 +425,8 @@ class AsimModels:
               + ", ".join(f"{s.replace('PTYPE_', '')} {m.n_params}" for s, m in self.nmtf.items()) + " parameters",
               flush=True)
 
-        # ActivitySim's sub-hourly examples (SEMCOG, ARC, MWCOG) start their periods at 03:00; MTC's hourly at 05:00.
-        grid = PeriodGrid.with_early_bin(self.time_resolution, early_end=300 if self.time_resolution == 60 else 180)
-        self.tod = {g: TourTOD(grid, SPECS[g], buffer=self.home_inter, maxiter=self.tod_maxiter, dynamic="asim")
+        self.tod = {g: TourTOD(grid, SPECS[g], buffer=self.home_inter, maxiter=self.tod_maxiter, dynamic="asim",
+                               points=True)
                     for g in GROUPS}
         design = self.tod_design(records, X)
         self.indep = {}
@@ -394,15 +449,16 @@ class AsimModels:
         self.departure_records_skipped = 0
         for r in records:
             for t in r.tours:
-                for direction, stops in (("outbound", t.outbound), ("inbound", t.inbound)):
-                    anchor = t.start if direction == "outbound" else t.end
+                seg = stop_segment(t.purpose, r.ptype)
+                h = tour_start_hour(grid, t.start)
+                for outbound, stops in ((True, t.outbound), (False, t.inbound)):
                     for act, _, _ in stops:
-                        trip_keys.append((t.purpose, direction, hour_band(anchor), r.ptype))
+                        trip_keys.append((seg, outbound, purpose_range(seg, outbound, h), r.ptype))
                         trip_acts.append(act)
-                deps = departure_keys(t, grid)
+                deps = departure_keys(t, grid, seg)
                 if not deps and (t.outbound or t.inbound):
                     self.departure_records_skipped += 1
-                for key, dep, _ in deps:
+                for key, dep in deps:
                     dep_keys.append(key)
                     dep_periods.append(int(grid.end_period_of(dep)))
         self.stop_classes = STOP_ALTS
@@ -410,7 +466,6 @@ class AsimModels:
         self.trip_departure = Lookup(list(range(grid.n))).fit(dep_keys, dep_periods)
         print(f"  ASIM-9 trip departure: {len(dep_keys):,} departures, {len(self.trip_departure.tables)} lookup cells; "
               f"{self.departure_records_skipped} tours with non-increasing departures skipped")
-        self.grid = grid
         return self
 
     def n_params(self) -> dict:

@@ -29,7 +29,7 @@ def test_cemdap_models(data):
     assert set(m.counts) == set(COUNT_POSITIONS)
     rng = np.random.default_rng(0)
     assert set(m.work.sample(X, rng)) <= {0, 1}
-    s = m.start.sample(np.hstack([X, np.zeros((52, 1))]), rng, lo=10, hi=500)
+    s = m.start.sample(np.hstack([X, np.zeros((52, 3))]), rng, lo=10, hi=500)
     assert s.shape == (52,) and s.min() >= 10 and s.max() <= 500
     from composhed.common.report import GenerationReport
 
@@ -38,11 +38,28 @@ def test_cemdap_models(data):
     assert sum(r["duration"] for r in rows) == 1440 and "stops" in trace
 
 
+def test_cemdap_work_based_tour_record():
+    from composhed.cemdap.data import build_record
+    from composhed.common.tours import extract_day_structure
+
+    rows, t = [], 0
+    for act, d in (("home", 420), ("work", 200), ("shop", 30), ("work", 280), ("home", 510)):
+        rows.append({"act": act, "start": t, "end": t + d, "duration": d})
+        t += d
+    day = extract_day_structure(rows, collapse_mandatory_tours=True, mandatory="work_based")
+    r = build_record(0, {}, day)
+    assert (r.mand_type, r.mand_start, r.mand_duration, r.n_wb) == ("work", 420, 510, 1)
+    # The work stay before the work-based tour, then its stop, both against the work-based period's residual.
+    assert r.home_stays == [{"side": "work", "duration": 200, "residual": 510.0}]
+    assert r.stops == [{"purpose": "shop", "duration": 30, "position": "wb_tour", "index": 0, "residual": 310.0}]
+
+
 def test_daysim_models(data):
     from composhed.common.report import GenerationReport
     from composhed.daysim.chain import DaysimChain
     from composhed.daysim.data import (
         available,
+        stop_allowed,
         build_records,
         enumerate_patterns,
         feasible,
@@ -58,19 +75,29 @@ def test_daysim_models(data):
     )
 
     pats = enumerate_patterns()
-    assert len(pats) == 1324 and len(set(pats)) == 1324  # DaySim's 2,080 less the work / school stop flags
-    v = (1, 0, 1, 1, 1, 0, 0) + (1, 0, 0, 0, 0)
+    assert len(pats) == 2080 and len(set(pats)) == 2080  # DaySim's TOTAL_ALTERNATIVES
+    z7 = (0,) * 7
+    v = (1, 0, 1, 1, 1, 0, 0) + (0, 0, 1, 0, 0, 0, 0)
     assert not feasible(v[:7], v[7:])  # 4 tour purposes
-    # DaySim availability: work tours for workers only, school tours for students only.
-    work_day, school_day = (1, 0, 0, 0, 0, 0, 0) + (0,) * 5, (0, 1, 0, 0, 0, 0, 0) + (0,) * 5
+    # Work / school stops only with a work or school tour, and at most one of them.
+    assert not feasible((0, 0, 0, 0, 1, 0, 0), (1, 0, 0, 0, 0, 0, 0))
+    assert feasible((0, 1, 0, 0, 0, 0, 0), (1, 0, 0, 0, 0, 0, 0))
+    assert not feasible((1, 0, 0, 0, 0, 0, 0), (1, 1, 0, 0, 0, 0, 0))
+    # DaySim availability: work tours and stops for workers only, school tours and stops for students only.
+    work_day, school_day = (1, 0, 0, 0, 0, 0, 0) + z7, (0, 1, 0, 0, 0, 0, 0) + z7
     assert not available(work_day, False, True) and available(work_day, True, False)
     assert not available(school_day, True, False) and available(school_day, False, True)
+    assert not available((0, 1, 0, 0, 0, 0, 0) + (1, 0, 0, 0, 0, 0, 0), False, True)
     assert is_worker({"employment": "employed"}) and is_student({"employment": "void"}, "SCHOOL")
+    # Stop purposes a tour allows (IntermediateStopGenerationModel).
+    assert stop_allowed("work", "education") and not stop_allowed("shop", "work")
+    assert stop_allowed("escort", "escort") and not stop_allowed("shop", "escort") and stop_allowed("shop", "visit")
     # Two tour purposes share one person vector scaled by log(2); the tour component covers non-mandatory tours.
-    a = pattern_inter_attrs((1, 0, 0, 0, 1, 0, 0) + (1, 0, 0, 0, 0))
-    assert np.isclose(a[19], np.log(2)) and a[20] == 0 and a[21] == 1 and a[22] == 1
-    assert pattern_b_mask().sum() == 7 * 18 + 12 + 2 * 16 + 2 * 4
-    assert pattern_tours((1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0), {"shop": 2}) == ["work", "education", "shop", "shop"]
+    a = pattern_inter_attrs((1, 0, 0, 0, 1, 0, 0) + (0, 0, 1, 0, 0, 0, 0))
+    assert np.isclose(a[21], np.log(2)) and a[22] == 0 and a[23] == 1 and a[24] == 1
+    assert pattern_inter_attrs((1, 0, 0, 0, 0, 0, 0) + (1, 0, 0, 0, 0, 0, 0))[24] == 0  # work stops: not the stop component
+    assert pattern_b_mask().sum() == 7 * 18 + 14 + 2 * 16 + 2 * 4
+    assert pattern_tours((1, 1, 0, 0, 1, 0, 0) + z7, {"shop": 2}) == ["work", "education", "shop", "shop"]
     attr_df, sched, train_pids, _ = data
     records, _, _ = build_records(attr_df, sched, train_pids)
     X, names = encode_labels([r.labels for r in records])
@@ -141,17 +168,26 @@ def test_activitysim_ordering_and_trip_keys():
 
     e = tour_env(["social"], [7 * 60 + 30], [19 * 60 + 10], [Counter(work=1, social=1)], [False])
     assert e["start"][0, 0] == 7 and e["end"][0, 0] == 19 and e["duration"][0, 0] == 12 and e["is_social"][0, 0]
-    grid = PeriodGrid.with_early_bin(60)
+    grid = PeriodGrid.with_early_bin(60, early_end=360, early_point=330)  # periods 5-23 -> indices 0-18
     # 08:00 shop stop 20 min, work 08:20–17:00, two inbound stops 17:00–17:30 and 17:30–18:00.
     t = AsimTour("work", 480, 1080, outbound=[("shop", 480, 20)], inbound=[("escort", 1020, 30), ("shop", 1050, 30)],
                  primary_start=500, primary_end=1020)
-    keys = departure_keys(t, grid)
-    assert [(k[0], k[2], k[4], dep, ref) for k, dep, ref in keys] == [
-        ("outbound", 4, 0, 500, 480),           # anchored on the start period (08:00), counted forwards
-        ("inbound", 13, 1, 1020, 1050),         # anchored on the end period (17:00–18:00), counted backwards
-        ("inbound", 13, 0, 1050, 1080)]
+    assert departure_keys(t, grid, "work") == [
+        (("work", True, 3, 2), 500),    # outbound trip 2, tour hour = start period (08:00)
+        (("work", False, 12, 1), 1020),  # inbound trips numbered from the primary activity,
+        (("work", False, 12, 2), 1050)]  # tour hour = end period (17:00–18:00)
     # work 08:00–11:40, shop 11:40–12:10, work 12:10–16:40, escort 16:40–17:00: the shop sits inside the
     # merged work block (08:00–16:10 after merging), so the inbound departures are out of order.
     frag = AsimTour("work", 480, 1020, inbound=[("shop", 700, 30), ("escort", 1000, 20)],
                     primary_start=480, primary_end=970)
-    assert departure_keys(frag, grid) == []
+    assert departure_keys(frag, grid, "work") == []
+    from composhed.activitysim.models import extension_eligible, log_max_window, purpose_range
+
+    assert purpose_range("work", True, 8) == "5-8" and purpose_range("work", False, 15) == "15-23"
+    assert purpose_range("shopping", True, 8) == "5-23"
+    # escort 2 and shopping 1 are at their maximum; othdiscr is not chosen; 5 tours in all is not eligible
+    assert extension_eligible((2, 1, 0, 0, 0)) == [True, True, False, False, False]
+    assert extension_eligible((1, 0, 0, 1, 0)) == [False, False, False, True, False]
+    assert extension_eligible((2, 1, 1, 1, 0)) == [False] * 5
+    # work 08:30–17:30 (periods 8–17): free blocks 5–8 (4 periods) and 17–23 (7 periods)
+    assert np.isclose(log_max_window([(510, 1050)], grid), np.log1p(7))

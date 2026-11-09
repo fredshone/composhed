@@ -1,24 +1,19 @@
 """ActivitySim tour scheduling utility specs (ASIM-4/6), after prototype_mtc v1.6.0.
 
-The terms follow ``tour_scheduling_work.csv``, ``tour_scheduling_school.csv`` and
-``tour_scheduling_nonmandatory.csv``. Times are in hours, as ActivitySim's
-``start`` / ``end`` / ``duration`` columns: ``start`` is the clock hour of the
-departure period, ``end`` that of the arrival period, ``duration = end - start``.
-The early period (00:00–05:00 on the hourly grid) counts as the hour before the
-first regular period, as ActivitySim maps earlier times into its first period.
+The terms are those of ``tour_scheduling_work.csv``, ``tour_scheduling_school.csv``
+and ``tour_scheduling_nonmandatory.csv``, row by row, with the coefficients the
+``*_coefficients.csv`` files constrain to 0 left out (the reference constants).
+Times are in hours, as ActivitySim's ``start`` / ``end`` / ``duration`` columns:
+``start`` is the clock hour of the departure period, ``end`` that of the arrival
+period, ``duration = end - start``. On the hourly grid the first period is
+05:00 and holds every earlier time, as ActivitySim's first period does.
 
-Each spec has:
-
-* grouped departure, arrival and duration constants (MTC's groups; one reference
-  group per block). Non-mandatory tours have separate escort and non-escort sets;
-* linear shift effects (``start``, ``duration``) interacted with person type,
-  income, tour position and purpose;
-* time-band interactions (early departure, late arrival, short duration, ...).
-
-Terms that need data NTS does not have are left out: mode-choice logsum and
-auto times, CBD destination, household composition, joint tours. Day of week is
-added (Saturday and Sunday shift effects), because NTS covers every day and
-ActivitySim models a weekday.
+Rows whose variables NTS lacks are left out: mode-choice logsum and auto times,
+CBD destination, household composition, joint tours, eat-out tours and
+part-time workers (NTS has none). Saturday and Sunday shift effects are added,
+because NTS covers every day and ActivitySim models a weekday. The timetable
+rows (previous tour ends / begins, adjacent windows, tours still to schedule per
+free period) are ``TourTOD``'s ``"asim"`` dynamic terms.
 """
 
 import numpy as np
@@ -42,8 +37,13 @@ DUR_MAND = [("0_2", 0, 3), ("3_4", 3, 5), ("5_6", 5, 7), ("7_8", 7, 9), ("9", 9,
             ("11", 11, 12), ("12_13", 12, 14), ("14_plus", 14, 99)]
 DUR_NM = [("0_1", 0, 2), ("2_3", 2, 4), ("4_5", 4, 6), ("6_7", 6, 8), ("8_10", 8, 11), ("11_13", 11, 14),
           ("14_plus", 14, 99)]
-# Reference groups (constrained to 0), as in the MTC coefficient files where they exist.
-REF = {"dep": "7", "arr": "15", "dur_mand": "10", "dur_nm": "0_1"}
+# Constants the coefficient files constrain to 0.
+FIXED = {
+    "work": {"dep_7", "arr_early", "arr_15", "dur_10"},
+    "school": {"dep_7", "arr_15", "dur_7_8"},
+    "is_not_escort": {"dep_16_18", "arr_19_21", "dur_0_1"},
+    "is_escort": {"dep_13_15", "dur_0_1"} | {f"arr_{n}" for n, _, _ in ARR_GROUPS if n not in ("19_21", "late")},
+}
 
 
 def clock_hours(grid: PeriodGrid, p: np.ndarray) -> np.ndarray:
@@ -76,15 +76,14 @@ def _base(grid: PeriodGrid, ps: np.ndarray, pe: np.ndarray, dur_groups) -> tuple
     g |= _dummies("dur", dur_idx, dur_groups)
     hs, he = np.floor(S + 1e-9), np.floor(E + 1e-9)
     g |= {"dep_lt6": (hs < 6), "dep_lt7": (hs < 7), "dep_lt8": (hs < 8), "dep_10_12": (hs > 9) & (hs < 13),
-          "arr_gt22": (he > 22), "arr_19_21": (he > 18) & (he < 22),
-          "dur_lt2": (D < 2), "dur_lt6": (D < 6), "dur_lt8": (D < 8), "dur_lt9": (D < 9)}
+          "arr_gt22": (he > 22), "dur_lt2": (D < 2), "dur_lt6": (D < 6), "dur_lt8": (D < 8), "dur_lt9": (D < 9)}
     return {k: np.asarray(v, dtype=float) for k, v in g.items()}, dur_idx
 
 
-def _constants(z: str, dur_groups, dur_ref: str) -> list[tuple[str, str]]:
-    return ([(z, f"dep_{n}") for n, _, _ in DEP_GROUPS if n != REF["dep"]]
-            + [(z, f"arr_{n}") for n, _, _ in ARR_GROUPS if n != REF["arr"]]
-            + [(z, f"dur_{n}") for n, _, _ in dur_groups if n != dur_ref])
+def _constants(z: str, dur_groups, fixed: set) -> list[tuple[str, str]]:
+    names = ([f"dep_{n}" for n, _, _ in DEP_GROUPS] + [f"arr_{n}" for n, _, _ in ARR_GROUPS]
+             + [f"dur_{n}" for n, _, _ in dur_groups])
+    return [(z, g) for g in names if g not in fixed]
 
 
 def _shifts(names: list[str], what=("start", "duration")) -> list[tuple[str, str]]:
@@ -92,10 +91,12 @@ def _shifts(names: list[str], what=("start", "duration")) -> list[tuple[str, str
 
 
 def work_spec(grid: PeriodGrid, ps, pe) -> TodSpec:
+    """``tour_scheduling_work.csv``: ``ptype == 4`` (non-working adult) duration, ``ptype == 3`` (university
+    student) departure, income × departure, first of 2+ and second tour shifts, high-income and rural early /
+    late interactions, full-time worker under 9 hours and 10–12 departure, under-8-hour terms."""
     g, dbin = _base(grid, ps, pe, DUR_MAND)
-    terms = (_constants("const", DUR_MAND, REF["dur_mand"])
-             + _shifts([f"ptype_{p}" for p in PERSON_TYPES if p != "FTW"])
-             + [("income", "start")]
+    terms = (_constants("const", DUR_MAND, FIXED["work"])
+             + [("ptype_NONWORK", "duration"), ("ptype_UNIV", "start"), ("income", "start")]
              + _shifts(["first_of_2plus", "subsequent", "saturday", "sunday"])
              + [("high_income", "dep_lt6"), ("high_income", "arr_gt22"), ("rural", "dep_lt6"), ("rural", "arr_gt22"),
                 ("ptype_FTW", "dur_lt9"), ("ptype_FTW", "dep_10_12"),
@@ -105,9 +106,12 @@ def work_spec(grid: PeriodGrid, ps, pe) -> TodSpec:
 
 
 def school_spec(grid: PeriodGrid, ps, pe) -> TodSpec:
+    """``tour_scheduling_school.csv``: full-time worker departure and duration, non-worker departure, university
+    student departure and duration, ``ptype == 7`` duration, first of 2+ and subsequent shifts, high-income
+    early / late interactions, under-6-hour terms."""
     g, dbin = _base(grid, ps, pe, DUR_MAND)
-    terms = (_constants("const", DUR_MAND, REF["dur_mand"])
-             + _shifts([f"ptype_{p}" for p in PERSON_TYPES if p != "SCHOOL"])
+    terms = (_constants("const", DUR_MAND, FIXED["school"])
+             + _shifts(["ptype_FTW", "ptype_UNIV"]) + [("ptype_NONWORK", "start"), ("ptype_SCHOOL", "duration")]
              + [("first_of_2plus", "start"), ("first_of_2plus", "duration"), ("subsequent", "duration")]
              + _shifts(["saturday", "sunday"])
              + [("high_income", "dep_lt6"), ("high_income", "arr_gt22"),
@@ -117,10 +121,15 @@ def school_spec(grid: PeriodGrid, ps, pe) -> TodSpec:
 
 
 def nonmandatory_spec(grid: PeriodGrid, ps, pe) -> TodSpec:
+    """``tour_scheduling_nonmandatory.csv``: separate escort and non-escort constants; shopping, maintenance and
+    visit departure and duration shifts; ``ptype == 6`` and ``ptype == 7`` departure and duration shifts; numbers
+    of mandatory, escort and other tours × departure; first of 2+ / subsequent tours of one purpose; the
+    early-departure, late-arrival and short-duration interactions."""
     g, dbin = _base(grid, ps, pe, DUR_NM)
-    terms = (_constants("is_not_escort", DUR_NM, REF["dur_nm"]) + _constants("is_escort", DUR_NM, REF["dur_nm"])
+    terms = (_constants("is_not_escort", DUR_NM, FIXED["is_not_escort"])
+             + _constants("is_escort", DUR_NM, FIXED["is_escort"])
              + _shifts([f"purpose_{p}" for p in ("shopping", "othmaint", "social")])
-             + _shifts([f"ptype_{p}" for p in PERSON_TYPES if p != "FTW"])
+             + _shifts(["ptype_DRIVING", "ptype_SCHOOL"])
              + [("num_mand", "start"), ("num_escort", "start"), ("num_non_escort", "start"),
                 ("first_of_2plus_same", "start"), ("subsequent_same", "duration")]
              + _shifts(["saturday", "sunday"])

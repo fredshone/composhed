@@ -25,7 +25,7 @@ from composhed.common.schedule import home_day
 from composhed.common.timewindow import TimeWindow
 from composhed.common.tod import layout_rescale
 from composhed.common.tourgen import PlannedTour, tours_to_rows
-from composhed.daysim.data import STOP_PURPOSES, TOUR_PURPOSES, pattern_tours, tod_group
+from composhed.daysim.data import STOP_PURPOSES, TOUR_PURPOSES, pattern_tours, stop_allowed, tod_group
 from composhed.daysim.models import (
     DIRECTIONS,
     MAX_STOPS,
@@ -149,7 +149,8 @@ class DaysimChain:
         m = self.m
         out = []
         anchor0 = anchor
-        avail = np.array([[c == NONE or c in pattern_stops for c in STOPGEN_CLASSES]])
+        avail = np.array([[c == NONE or (c in pattern_stops and stop_allowed(tour_purpose, c))
+                           for c in STOPGEN_CLASSES]])
 
         def next_purpose(k, anchor_):
             if k >= MAX_STOPS:
